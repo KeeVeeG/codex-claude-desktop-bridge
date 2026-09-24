@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { prepareInstallation, installApplications, writeJsonAtomic, PLUGIN_NAME, CLAUDE_SEND_PERMISSION, grantClaudeSendPermission } from '../scripts/install.mjs';
+import { prepareInstallation, installApplications, writeJsonAtomic, PLUGIN_NAME, RUNTIME_FILES, CLAUDE_SEND_PERMISSION, grantClaudeSendPermission } from '../scripts/install.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const work = path.join(root, 'work');
@@ -192,7 +192,13 @@ test('staged Codex and Claude configurations start eight MCP tools from Unicode 
   const originalClaude = fs.readFileSync(sourceClaudeConfigPath, 'utf8');
   const prepared = prepareInstallation({ sourceRoot: root, homeDir });
   const copiedRoot = path.join(homeDir, 'installed copy with spaces', 'плагин Claude Codex');
-  fs.cpSync(prepared.destination, copiedRoot, { recursive: true });
+  // Node 22 on Windows may omit dot-prefixed plugin directories in a recursive
+  // copy. Copy the staged runtime allowlist explicitly for this launch probe.
+  for (const relative of RUNTIME_FILES) {
+    const destination = path.join(copiedRoot, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(path.join(prepared.destination, relative), destination);
+  }
   const unrelatedCwd = path.join(homeDir, 'unrelated project directory');
   fs.mkdirSync(unrelatedCwd);
   const codexManifest = JSON.parse(fs.readFileSync(path.join(copiedRoot, '.codex-plugin', 'plugin.json'), 'utf8'));

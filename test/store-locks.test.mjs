@@ -137,3 +137,107 @@ test('a crashed recovery guard stops safely without removing either lock', async
   assert.equal(fs.readFileSync(recovery, 'utf8'), staleRecovery);
   assert.equal(readSession(session).unexpected, undefined);
 });
+
+test('Windows recovery-guard contention retries exclusive acquisition before removing a stale lock',
+  { skip: process.platform !== 'win32' && 'Windows exclusive-create contention is platform-specific.' }, async t => {
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+      await t.test(code, async sub => {
+        const setup = await fixture(sub);
+        const session = createSession({ ...setup, threadId: `guard-transient-${code}` });
+        const lock = path.join(session.dir, 'state.lock');
+        const recovery = path.join(session.dir, 'state.lock.recovery');
+        const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
+        fs.writeFileSync(lock, stale);
+        const open = fs.openSync;
+        let attempts = 0;
+        let callbacks = 0;
+        sub.mock.method(fs, 'openSync', (file, flags, ...args) => {
+          if (file === recovery) {
+            attempts++;
+            assert.equal(flags, 'wx');
+            assert.equal(fs.readFileSync(lock, 'utf8'), stale, 'failed guard acquisition cannot remove the main lock');
+            if (attempts <= 2) throw Object.assign(new Error('Temporary recovery guard contention'), { code });
+          }
+          return open(file, flags, ...args);
+        });
+        updateSession(session, state => { callbacks++; state.counter = (state.counter ?? 0) + 1; });
+        assert.equal(attempts, 3);
+        assert.equal(callbacks, 1);
+        assert.equal(readSession(session).counter, 1);
+        assert.equal(fs.existsSync(lock), false);
+        assert.equal(fs.existsSync(recovery), false);
+      });
+    }
+  });
+
+test('a non-transient recovery-guard error propagates once without removing a lock', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'guard-permanent' });
+  const lock = path.join(session.dir, 'state.lock');
+  const recovery = path.join(session.dir, 'state.lock.recovery');
+  const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
+  fs.writeFileSync(lock, stale);
+  const open = fs.openSync;
+  const expected = Object.assign(new Error('Permanent guard creation failure'), { code: 'EIO' });
+  let attempts = 0;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (file === recovery) { attempts++; throw expected; }
+    return open(file, ...args);
+  });
+  assert.throws(() => updateSession(session, state => { state.unexpected = true; }), error => error === expected);
+  assert.equal(attempts, 1);
+  assert.equal(fs.readFileSync(lock, 'utf8'), stale);
+  assert.equal(fs.existsSync(recovery), false);
+  assert.equal(readSession(session).unexpected, undefined);
+});
+
+test('persistent Windows recovery-guard contention stops at the existing deadline and preserves locks',
+  { skip: process.platform !== 'win32' && 'Windows exclusive-create contention is platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'guard-deadline' });
+    const lock = path.join(session.dir, 'state.lock');
+    const recovery = path.join(session.dir, 'state.lock.recovery');
+    const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
+    fs.writeFileSync(lock, stale);
+    const open = fs.openSync;
+    const expected = Object.assign(new Error('Recovery guard remains busy'), { code: 'EPERM' });
+    let attempts = 0;
+    let now = 100_000;
+    t.mock.method(Date, 'now', () => { now += 1000; return now; });
+    t.mock.method(fs, 'openSync', (file, ...args) => {
+      if (file === recovery) { attempts++; throw expected; }
+      return open(file, ...args);
+    });
+    assert.throws(() => updateSession(session, state => { state.unexpected = true; }), error => error === expected);
+    assert.equal(attempts, 5);
+    assert.equal(fs.readFileSync(lock, 'utf8'), stale);
+    assert.equal(fs.existsSync(recovery), false);
+    assert.equal(readSession(session).unexpected, undefined);
+  });
+
+test('recovery retry rereads ownership and never removes a live replacement lock',
+  { skip: process.platform !== 'win32' && 'Windows exclusive-create contention is platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'guard-live-replacement' });
+    const lock = path.join(session.dir, 'state.lock');
+    const recovery = path.join(session.dir, 'state.lock.recovery');
+    fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'old-owner' }));
+    const live = JSON.stringify({ pid: process.pid, token: 'live-replacement' });
+    const open = fs.openSync;
+    let attempts = 0;
+    let now = 100_000;
+    t.mock.method(Date, 'now', () => { now += 1000; return now; });
+    t.mock.method(fs, 'openSync', (file, ...args) => {
+      if (file === recovery) {
+        attempts++;
+        fs.writeFileSync(lock, live);
+        throw Object.assign(new Error('Guard creation raced with another owner'), { code: 'EPERM' });
+      }
+      return open(file, ...args);
+    });
+    assert.throws(() => updateSession(session, state => { state.unexpected = true; }), /Bridge state is busy/);
+    assert.equal(attempts, 1);
+    assert.equal(fs.readFileSync(lock, 'utf8'), live);
+    assert.equal(fs.existsSync(recovery), false);
+    assert.equal(readSession(session).unexpected, undefined);
+  });
