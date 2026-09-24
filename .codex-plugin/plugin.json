@@ -1,0 +1,28 @@
+{
+  "name": "codex-claude-desktop-bridge",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Exchange native messages between paired Codex Desktop and Claude Desktop Code conversations through MCP tools.",
+  "author": {
+    "name": "KeeVeeG",
+    "url": "https://github.com/KeeVeeG"
+  },
+  "skills": "./skills/",
+  "mcpServers": {
+    "codex-claude-desktop-bridge": {
+      "command": "node",
+      "cwd": "./",
+      "args": ["./scripts/mcp.mjs"],
+      "env_vars": ["CODEX_APP_TOOLS_PIPE_PATH", "CODEX_THREAD_ID", "USERPROFILE", "HOME", "PATH", "CLAUDE_CONFIG_DIR", "CODEX_CLAUDE_BRIDGE_STATE_DIR", "CODEX_CLAUDE_BRIDGE_REGISTRY_DIR"]
+    }
+  },
+  "interface": {
+    "displayName": "Codex–Claude Desktop Bridge",
+    "shortDescription": "Link Codex and Claude Desktop conversations.",
+    "longDescription": "Pair a Codex task with a Claude Desktop Code session so either can send messages and delegate work.",
+    "developerName": "KeeVeeG",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Connect this Codex task with a Claude Desktop Code conversation so we can exchange messages."
+  }
+}

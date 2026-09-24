@@ -1,0 +1,14 @@
+{
+  "name": "codex-claude-desktop-bridge",
+  "version": "0.1.0",
+  "author": "KeeVeeG",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/KeeVeeG/codex-claude-desktop-bridge.git" },
+  "homepage": "https://github.com/KeeVeeG/codex-claude-desktop-bridge#readme",
+  "bugs": { "url": "https://github.com/KeeVeeG/codex-claude-desktop-bridge/issues" },
+  "private": true,
+  "type": "module",
+  "description": "Asynchronous native chat messages between Codex Desktop and Claude Desktop Code on Windows",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node scripts/test.mjs", "mcp": "node scripts/mcp.mjs", "package": "node scripts/package.mjs" }
+}

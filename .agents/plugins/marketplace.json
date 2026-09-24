@@ -1,0 +1,16 @@
+{
+  "name": "keeveeg-desktop-bridge",
+  "interface": { "displayName": "Codex–Claude Desktop Bridge" },
+  "plugins": [
+    {
+      "name": "codex-claude-desktop-bridge",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/KeeVeeG/codex-claude-desktop-bridge.git",
+        "ref": "main"
+      },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

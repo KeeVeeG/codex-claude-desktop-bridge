@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codex-claude-desktop-bridge": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp.mjs"],
+      "env_vars": ["CODEX_APP_TOOLS_PIPE_PATH", "CODEX_THREAD_ID", "LOCALAPPDATA", "USERPROFILE", "HOME", "PATH", "CLAUDE_CONFIG_DIR", "CODEX_CLAUDE_BRIDGE_STATE_DIR", "CODEX_CLAUDE_BRIDGE_REGISTRY_DIR"]
+    }
+  }
+}

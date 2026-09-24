@@ -1,0 +1,9 @@
+{
+  "name": "codex-claude-desktop-bridge",
+  "version": "0.1.0",
+  "author": { "name": "KeeVeeG", "url": "https://github.com/KeeVeeG" },
+  "license": "MIT",
+  "description": "Exchange native messages between paired Codex Desktop and Claude Desktop Code conversations through MCP tools.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
