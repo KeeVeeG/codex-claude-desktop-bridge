@@ -1,5 +1,7 @@
 # Codex–Claude Desktop Bridge
 
+[![Windows CI](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml)
+
 Asynchronous, two-way messaging between an existing **Codex Desktop** task and a local **Code session in Claude Desktop** on Windows. Messages appear in both conversations through ordinary MCP tools. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
 
 Codex and Claude are peers. Either can start a conversation, ask the other to do something, exchange ideas, or share progress. The bridge carries text and leaves its meaning and purpose to the participants.
@@ -105,3 +107,5 @@ For packaging and release commands, see [Releases](docs/PUBLISHING.md).
 ## License
 
 [MIT](LICENSE) — Copyright © 2026 KeeVeeG.
+
+This is an independent project and is not affiliated with or endorsed by OpenAI or Anthropic.
