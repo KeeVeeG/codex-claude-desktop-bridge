@@ -50,7 +50,7 @@ test('Claude transport failure never leaks the session token', async t => {
   });
 });
 
-test('Codex adapter discovers the app tool and addresses only the paired task', async t => {
+test('Codex adapter discovers the app tool and addresses only the selected task', async t => {
   const pipe = await mockPipe(t, {
     framed: true,
     onMessage(message, socket) {

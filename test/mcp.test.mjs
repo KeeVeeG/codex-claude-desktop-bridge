@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { getSession, readSession } from '../lib/store.mjs';
+import { createSession, getSession, readSession, updateSession, recordMessage } from '../lib/store.mjs';
 import { nativeFixture, mockPipe, encodeFrame, messageTool } from './native-helpers.mjs';
 
 const serverPath = fileURLToPath(new URL('../scripts/mcp.mjs', import.meta.url));
@@ -191,14 +191,13 @@ function registerClaudeParent(setup, parentPid, socketPath) {
   return sessionId;
 }
 
-test('MCP advertises symmetric pairing and text-only messages without routing tokens', async t => {
+test('MCP advertises direct, addressed messages without pair-management tools or routing tokens', async t => {
   const fixture = await nativeFixture(t);
   const client = startMcp(t, { CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir });
   await initialize(client);
   const listed = await client.rpc('tools/list');
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), [
-    'bridge_status', 'connect_claude', 'connect_codex', 'disconnect_bridge',
-    'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex',
+    'bridge_status', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex',
   ]);
   const listSchema = listed.result.tools.find(tool => tool.name === 'list_codex_chats').inputSchema;
   assert.equal(listSchema.properties.limit.maximum, 50);
@@ -208,52 +207,60 @@ test('MCP advertises symmetric pairing and text-only messages without routing to
   assert.match(JSON.stringify(oversizedList), /limit must be an integer from 1 to 50/);
   for (const toolName of ['send_to_claude', 'send_to_codex']) {
     const schema = listed.result.tools.find(tool => tool.name === toolName).inputSchema;
-    assert.deepEqual(Object.keys(schema.properties).sort(), ['message', 'message_id']);
+    const targetField = toolName === 'send_to_claude' ? 'session_id' : 'thread_id';
+    assert.deepEqual(Object.keys(schema.properties).sort(), ['message', 'message_id', targetField].sort());
+    assert.deepEqual(schema.required.sort(), ['message', targetField].sort());
+    assert.ok(isToolFailure(await callTool(client, toolName, { message: 'Missing destination.' })));
     for (const field of ['files', 'connection', 'connection_token', 'request_id', 'timeout_seconds']) {
-      const response = await callTool(client, toolName, { message: 'Plain text only.', [field]: field === 'files' ? [] : 'retired' });
+      const response = await callTool(client, toolName, { message: 'Plain text only.', [targetField]: 'chosen-target',
+        [field]: field === 'files' ? [] : 'retired' });
       assert.ok(isToolFailure(response));
       assert.match(JSON.stringify(response), new RegExp(`Unknown argument: ${field}`));
     }
   }
   assert.ok(isToolFailure(await callTool(client, 'ack_codex_request')));
+  assert.ok(isToolFailure(await callTool(client, 'connect_claude', { session_id: 'unused' })));
+  assert.ok(isToolFailure(await callTool(client, 'disconnect_bridge')));
   assert.deepEqual((await client.rpc('ping')).result, {});
 });
 
-test('Codex can initiate pairing and either peer can send independent messages without tokens', windowsOnly, async t => {
+test('Codex and Claude can initiate independent addressed messages without a connection or reply', windowsOnly, async t => {
   const setup = await setupMcp(t, { envThreadId: 'environment-fallback' });
   const meta = metadata('origin-mcp-chat');
   const listed = toolValue(await callTool(setup.client, 'list_claude_sessions'));
   assert.match(JSON.stringify(listed), new RegExp(setup.sessionId));
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(setup.token));
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, meta));
   const plainMessage = 'Для информации: первая часть готова. Ответ не нужен.\n{"branch":"feature/unicode","custom":{"revision":7}}';
-  toolValue(await callTool(setup.client, 'send_to_claude', { message: plainMessage, message_id: 'info-one' }, meta));
-  toolValue(await callTool(setup.client, 'send_to_claude', { message: 'Ещё информация без ожидания ответа.', message_id: 'info-two' }, meta));
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: plainMessage, message_id: 'info-one' }, meta));
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'Ещё информация без ожидания ответа.', message_id: 'info-two' }, meta));
   const deliveries = setup.claude.messages.filter(entry => entry.message.type === 'user');
   assert.equal(deliveries.length, 2);
   assert.ok(deliveries[0].message.message.content.includes(plainMessage));
+  assert.match(JSON.stringify(deliveries[0].message), /Codex task origin-mcp-chat/);
   assert.doesNotMatch(deliveries[0].message.message.content, /connection_token|reply_token|ack_codex_request|PowerShell syntax|Deadline:/);
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
   const independent = 'Независимое замечание Claude.\n{"kind":"observation","custom":["α","β"]}';
-  toolValue(await callTool(peer, 'send_to_codex', { message: independent, message_id: 'claude-info-one' }));
-  toolValue(await callTool(peer, 'send_to_codex', { message: 'Another independent update.', message_id: 'claude-info-two' }));
+  toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: independent, message_id: 'claude-info-one' }));
+  toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: 'Another independent update.', message_id: 'claude-info-two' }));
   assert.equal(setup.notifications.length, 2);
   assert.ok(setup.notifications[0].arguments.prompt.includes(independent));
+  assert.match(setup.notifications[0].arguments.prompt, new RegExp(setup.sessionId));
   for (const call of setup.notifications) assert.equal(call.arguments.threadId, 'origin-mcp-chat');
-  for (const [client, callerMetadata] of [[setup.client, meta], [peer, undefined]]) {
-    const status = toolValue(await callTool(client, 'bridge_status', { limit: 10 }, callerMetadata));
-    assert.match(JSON.stringify(status), /первая часть готова/);
-    assert.match(JSON.stringify(status), /Независимое замечание/);
-  }
-  const session = getSession({ stateDir: setup.stateDir, threadId: 'origin-mcp-chat' });
+  const codexStatus = toolValue(await callTool(setup.client, 'bridge_status', { limit: 10 }, meta));
+  const claudeStatus = toolValue(await callTool(peer, 'bridge_status', { limit: 10 }));
+  assert.match(JSON.stringify(codexStatus), /первая часть готова/);
+  assert.doesNotMatch(JSON.stringify(codexStatus), /Независимое замечание/);
+  assert.match(JSON.stringify(claudeStatus), /Независимое замечание/);
+  assert.doesNotMatch(JSON.stringify(claudeStatus), /первая часть готова/);
+  assert.ok(codexStatus.messages.every(message => message.route.from.kind === 'codex' && message.route.from.id === 'origin-mcp-chat'));
+  assert.ok(claudeStatus.messages.every(message => message.route.from.kind === 'claude' && message.route.from.id === setup.sessionId));
   assert.equal(getSession({ stateDir: setup.stateDir, threadId: 'environment-fallback' }), null);
-  assert.doesNotMatch(JSON.stringify(readSession(session)), /deadlineAt|timeoutSeconds|activeRequestId|claudeConnectionToken|replyTokenHash/);
   const visible = JSON.stringify([...setup.client.messages, ...peer.messages]) + setup.client.stderr() + peer.stderr();
   assert.doesNotMatch(visible, new RegExp(setup.token));
 });
 
-test('Claude can discover and select a Codex chat before receiving any bridge message', windowsOnly, async t => {
+test('Claude can discover and address a Codex chat before receiving any bridge message', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
@@ -265,31 +272,27 @@ test('Claude can discover and select a Codex chat before receiving any bridge me
   toolValue(await callTool(peer, 'list_codex_chats', { limit: 50 }));
   assert.equal(setup.notifications.length, 0, 'listing does not send messages');
   assert.equal(setup.claude.messages.length, 0);
-  assert.ok(isToolFailure(await callTool(peer, 'connect_codex', { thread_id: 'unknown-codex-chat' })));
-  assert.equal(getSession({ stateDir: setup.stateDir, threadId: 'unknown-codex-chat' }), null);
-  toolValue(await callTool(peer, 'connect_codex', { thread_id: 'codex-target-b' }));
-  assert.ok(setup.catalogCalls.every(call => call.arguments.limit >= 1 && call.arguments.limit <= 50), 'discovery and connection must both respect native list_threads bounds');
-  const session = getSession({ stateDir: setup.stateDir, threadId: 'codex-target-b' });
-  assert.equal(readSession(session).desktop.claudeSessionId, setup.sessionId);
-  toolValue(await callTool(peer, 'send_to_codex', { message: 'Claude started this conversation.', message_id: 'claude-first' }));
+  toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'codex-target-b', message: 'Claude started this conversation.', message_id: 'claude-first' }));
   assert.equal(setup.notifications.length, 1);
   assert.equal(setup.notifications[0].arguments.threadId, 'codex-target-b');
-  toolValue(await callTool(setup.client, 'send_to_claude', { message: 'Codex responds through the same pairing.', message_id: 'codex-second' }, metadata('codex-target-b')));
+  const olderThreadId = 'codex-older-than-recent-list';
+  assert.ok(!chats.some(chat => chat.thread_id === olderThreadId));
+  toolValue(await callTool(peer, 'send_to_codex', { thread_id: olderThreadId,
+    message: 'An exact older task ID remains addressable.', message_id: 'claude-older' }));
+  assert.equal(setup.notifications[1].arguments.threadId, olderThreadId);
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'Codex responds to the sender.', message_id: 'codex-second' }, metadata('codex-target-b')));
   assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
   const otherStatus = await callTool(setup.client, 'bridge_status', {}, metadata('codex-target-a'));
   assert.doesNotMatch(JSON.stringify(otherStatus), /Claude started this conversation/);
-  toolValue(await callTool(peer, 'disconnect_bridge'));
-  assert.ok(isToolFailure(await callTool(peer, 'send_to_codex', { message: 'Disconnected.' })));
-  assert.ok(isToolFailure(await callTool(setup.client, 'send_to_claude', { message: 'Disconnected.' }, metadata('codex-target-b'))));
+  assert.ok(setup.catalogCalls.every(call => call.arguments.limit >= 1 && call.arguments.limit <= 50));
 });
 
 test('message IDs deduplicate concurrent submissions from separate MCP processes in either direction', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const meta = metadata('codex-target-a');
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, meta));
   const twin = startMcp(t, setup.env);
   await initialize(twin);
-  const outbound = { message: 'Send this only once.', message_id: 'same-outbound-id' };
+  const outbound = { session_id: setup.sessionId, message: 'Send this only once.', message_id: 'same-outbound-id' };
   for (const response of await Promise.all([
     callTool(setup.client, 'send_to_claude', outbound, meta),
     callTool(twin, 'send_to_claude', outbound, meta),
@@ -299,7 +302,7 @@ test('message IDs deduplicate concurrent submissions from separate MCP processes
   const peer = startMcp(t, claudeEnv(setup));
   const peerTwin = startMcp(t, claudeEnv(setup));
   await Promise.all([initialize(peer), initialize(peerTwin)]);
-  const inbound = { message: 'One independent observation.', message_id: 'same-inbound-id' };
+  const inbound = { thread_id: 'codex-target-a', message: 'One independent observation.', message_id: 'same-inbound-id' };
   for (const response of await Promise.all([
     callTool(peer, 'send_to_codex', inbound), callTool(peerTwin, 'send_to_codex', inbound),
   ])) toolValue(response);
@@ -310,133 +313,160 @@ test('message IDs deduplicate concurrent submissions from separate MCP processes
 test('shared-server Codex metadata isolates sibling tasks and rejects malformed identities', windowsOnly, async t => {
   const setup = await setupMcp(t, { envThreadId: 'owner-chat' });
   const meta = metadata('owner-chat');
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, meta));
-  toolValue(await callTool(setup.client, 'send_to_claude', { message: 'Private owner information.', message_id: 'owner-private' }, meta));
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'Private owner information.', message_id: 'owner-private' }, meta));
   const otherMeta = { 'x-codex-turn-metadata': JSON.stringify({ thread_id: 'other-chat' }) };
-  assert.ok(isToolFailure(await callTool(setup.client, 'send_to_claude', { message: 'Wrong chat.' }, otherMeta)));
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'Independent sibling message.', message_id: 'sibling' }, otherMeta));
   assert.doesNotMatch(JSON.stringify(await callTool(setup.client, 'bridge_status', {}, otherMeta)), /Private owner information/);
-  assert.ok(isToolFailure(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, otherMeta)));
+  assert.doesNotMatch(JSON.stringify(await callTool(setup.client, 'bridge_status', {}, meta)), /Independent sibling message/);
+  // The startup task ID cannot identify a call from a shared MCP server.
+  const missingIdentityStatus = await callTool(setup.client, 'bridge_status');
+  assert.ok(isToolFailure(missingIdentityStatus));
+  assert.doesNotMatch(JSON.stringify(missingIdentityStatus), /Private owner information/);
+  assert.ok(isToolFailure(await callTool(setup.client, 'send_to_claude', {
+    session_id: setup.sessionId, message: 'Do not attribute this call to the startup task.',
+  })));
   for (const invalid of [
     { ...meta, 'openai/threadId': 'other-chat' },
     { 'x-codex-turn-metadata': { thread_id: 123 } },
     { 'x-codex-turn-metadata': { thread_id: '' } },
     { 'x-codex-turn-metadata': 'not-json' },
   ]) assert.ok(isToolFailure(await callTool(setup.client, 'bridge_status', {}, invalid)));
+  assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 2);
+});
+
+test('a v0.1.0 pairing record cannot constrain direct sends or leak into new status', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const threadId = 'legacy-codex-chat';
+  const ledger = createSession({ stateDir: setup.stateDir, threadId, cwd: setup.cwd });
+  const legacyDesktop = { threadId, pairId: 'legacy-pair', claudeSessionId: 'legacy-claude-session' };
+  updateSession(ledger, state => { state.desktop = legacyDesktop; });
+  recordMessage(ledger, { id: 'old-message', pairId: 'legacy-pair', direction: 'to_claude', message: 'Old private delivery.' });
+
+  toolValue(await callTool(setup.client, 'send_to_claude', {
+    session_id: setup.sessionId, message: 'New direct delivery.', message_id: 'new-message',
+  }, metadata(threadId)));
+  const status = toolValue(await callTool(setup.client, 'bridge_status', {}, metadata(threadId)));
+  assert.equal(status.messages.length, 1);
+  assert.equal(status.messages[0].route.to.id, setup.sessionId);
+  assert.doesNotMatch(JSON.stringify(status), /Old private delivery|legacy-claude-session/);
+  assert.deepEqual(readSession(ledger).desktop, legacyDesktop);
   assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
 });
 
-test('another registered Claude parent in the same project cannot use or hijack an existing pairing', windowsOnly, async t => {
+test('two Codex tasks and two Claude sessions can freely send to every opposite-side conversation', windowsOnly, async t => {
   const setup = await setupMcp(t);
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, metadata('codex-target-a')));
-  toolValue(await callTool(setup.client, 'send_to_claude', { message: 'Private conversation A.', message_id: 'private-a' }, metadata('codex-target-a')));
-  const otherPipe = await mockPipe(t);
-  const otherPeer = startMcp(t, claudeEnv(setup), { parentProxy: true });
-  const otherSessionId = registerClaudeParent(setup, otherPeer.child.pid, otherPipe.pipePath);
-  await initialize(otherPeer);
-  assert.ok(isToolFailure(await callTool(otherPeer, 'send_to_codex', { message: 'Must not reach A.' })));
-  assert.doesNotMatch(JSON.stringify(await callTool(otherPeer, 'bridge_status')), /Private conversation A/);
-  toolValue(await callTool(otherPeer, 'disconnect_bridge'));
-  assert.equal(readSession(getSession({ stateDir: setup.stateDir, threadId: 'codex-target-a' })).desktop.claudeSessionId, setup.sessionId);
-  assert.ok(isToolFailure(await callTool(otherPeer, 'connect_codex', { thread_id: 'codex-target-a' })));
-  assert.equal(setup.notifications.length, 0);
-  toolValue(await callTool(otherPeer, 'connect_codex', { thread_id: 'codex-target-b' }));
-  const otherState = readSession(getSession({ stateDir: setup.stateDir, threadId: 'codex-target-b' }));
-  assert.equal(otherState.desktop.claudeSessionId, otherSessionId);
-  toolValue(await callTool(otherPeer, 'send_to_codex', { message: 'Private conversation B.', message_id: 'private-b' }));
-  assert.equal(setup.notifications.length, 1);
-  assert.equal(setup.notifications[0].arguments.threadId, 'codex-target-b');
-  const ownerStatus = toolValue(await callTool(setup.client, 'bridge_status', {}, metadata('codex-target-a')));
-  assert.doesNotMatch(JSON.stringify(ownerStatus), /Private conversation B/);
-});
-
-test('an unregistered parent cannot impersonate Claude by supplying its socket path', windowsOnly, async t => {
-  const setup = await setupMcp(t);
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, metadata('codex-target-a')));
-  const impostor = startMcp(t, { ...claudeEnv(setup), CLAUDE_CODE_MESSAGING_SOCKET: setup.claude.pipePath }, { parentProxy: true });
-  await initialize(impostor);
-  assert.ok(isToolFailure(await callTool(impostor, 'send_to_codex', { message: 'Forged parent.' })));
-  assert.ok(isToolFailure(await callTool(impostor, 'bridge_status')));
-  assert.equal(setup.notifications.length, 0);
-});
-
-test('re-pairing isolates private history and message IDs even when the old pair finishes a send later', windowsOnly, async t => {
-  const setup = await setupMcp(t, { holdFirstNotification: true });
-  const meta = metadata('codex-target-a');
-  toolValue(await callTool(setup.client, 'connect_claude', { session_id: setup.sessionId }, meta));
-  const session = getSession({ stateDir: setup.stateDir, threadId: 'codex-target-a' });
-  const oldPairId = readSession(session).desktop.pairId;
-  assert.ok(oldPairId);
-  const outboundA = { message: 'Private A: original Codex message.', message_id: 'reused-outbound-id' };
-  toolValue(await callTool(setup.client, 'send_to_claude', outboundA, meta));
   const peerA = startMcp(t, claudeEnv(setup));
   await initialize(peerA);
-  const delayed = callTool(peerA, 'send_to_codex', { message: 'Private A: delayed Claude message.', message_id: 'reused-inbound-id' });
-  delayed.catch(() => {});
-  await Promise.race([
-    setup.firstNotification,
-    delayed.then(response => assert.fail(`Old delivery should remain in flight: ${JSON.stringify(response)}`)),
-  ]);
-  t.after(() => setup.releaseFirstNotification());
-  toolValue(await callTool(setup.client, 'disconnect_bridge', {}, meta));
-
   const claudeB = await mockPipe(t);
   const peerB = startMcp(t, claudeEnv(setup), { parentProxy: true });
   const sessionB = registerClaudeParent(setup, peerB.child.pid, claudeB.pipePath);
   await initialize(peerB);
-  toolValue(await callTool(peerB, 'connect_codex', { thread_id: 'codex-target-a' }));
-  const newBinding = readSession(session).desktop;
-  assert.equal(newBinding.claudeSessionId, sessionB);
-  assert.notEqual(newBinding.pairId, oldPairId);
-  for (const [client, callerMetadata] of [[setup.client, meta], [peerB, undefined]]) {
-    const status = toolValue(await callTool(client, 'bridge_status', { limit: 100 }, callerMetadata));
-    assert.deepEqual(status.messages, []);
-    assert.doesNotMatch(JSON.stringify(status), /Private A/);
+
+  for (const codexId of ['codex-target-a', 'codex-target-b']) {
+    for (const claudeId of [setup.sessionId, sessionB]) {
+      toolValue(await callTool(setup.client, 'send_to_claude', {
+        session_id: claudeId, message: `From ${codexId} to ${claudeId}.`, message_id: 'same-per-target-id',
+      }, metadata(codexId)));
+    }
+  }
+  for (const [peer, claudeId] of [[peerA, setup.sessionId], [peerB, sessionB]]) {
+    for (const codexId of ['codex-target-a', 'codex-target-b']) {
+      toolValue(await callTool(peer, 'send_to_codex', {
+        thread_id: codexId, message: `From ${claudeId} to ${codexId}.`, message_id: 'same-per-target-id',
+      }));
+    }
   }
 
-  const outboundB = { message: 'Private B: replacement Codex message.', message_id: outboundA.message_id };
-  toolValue(await callTool(setup.client, 'send_to_claude', outboundB, meta));
-  toolValue(await callTool(setup.client, 'send_to_claude', outboundB, meta));
-  const inboundB = { message: 'Private B: replacement Claude message.', message_id: 'reused-inbound-id' };
-  toolValue(await callTool(peerB, 'send_to_codex', inboundB));
-  toolValue(await callTool(peerB, 'send_to_codex', inboundB));
-  assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
+  const deliveriesA = setup.claude.messages.filter(entry => entry.message.type === 'user');
   const deliveriesB = claudeB.messages.filter(entry => entry.message.type === 'user');
-  assert.equal(deliveriesB.length, 1);
-  assert.ok(deliveriesB[0].message.message.content.includes(outboundB.message));
+  assert.equal(deliveriesA.length, 2);
+  assert.equal(deliveriesB.length, 2);
+  assert.equal(setup.notifications.length, 4);
+  assert.deepEqual(setup.notifications.map(call => call.arguments.threadId), [
+    'codex-target-a', 'codex-target-b', 'codex-target-a', 'codex-target-b',
+  ]);
+  for (const codexId of ['codex-target-a', 'codex-target-b']) {
+    assert.ok([...deliveriesA, ...deliveriesB].some(entry => JSON.stringify(entry.message).includes(`Codex task ${codexId}`)));
+    const status = toolValue(await callTool(setup.client, 'bridge_status', {}, metadata(codexId)));
+    assert.equal(status.messages.length, 2);
+    assert.ok(status.messages.every(message => message.route.from.kind === 'codex' && message.route.from.id === codexId));
+  }
+  for (const [peer, claudeId, otherId] of [[peerA, setup.sessionId, sessionB], [peerB, sessionB, setup.sessionId]]) {
+    const status = toolValue(await callTool(peer, 'bridge_status'));
+    assert.equal(status.messages.length, 2);
+    assert.ok(status.messages.every(message => message.route.from.kind === 'claude' && message.route.from.id === claudeId));
+    assert.doesNotMatch(JSON.stringify(status), new RegExp(`From ${otherId} to`));
+  }
+  for (const call of setup.notifications) {
+    assert.ok([setup.sessionId, sessionB].some(id => call.arguments.prompt.includes(`Claude Desktop session ${JSON.stringify(id)}`)));
+  }
+});
+
+test('an unregistered parent cannot impersonate Claude by supplying its socket path', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const impostor = startMcp(t, { ...claudeEnv(setup), CLAUDE_CODE_MESSAGING_SOCKET: setup.claude.pipePath }, { parentProxy: true });
+  await initialize(impostor);
+  assert.ok(isToolFailure(await callTool(impostor, 'send_to_codex', { thread_id: 'codex-target-a', message: 'Forged parent.' })));
+  assert.ok(isToolFailure(await callTool(impostor, 'bridge_status')));
+  assert.equal(setup.notifications.length, 0);
+});
+
+test('an in-flight send from one Claude session does not block another session with the same message ID', windowsOnly, async t => {
+  const setup = await setupMcp(t, { holdFirstNotification: true });
+  const peerA = startMcp(t, claudeEnv(setup));
+  const peerATwin = startMcp(t, claudeEnv(setup));
+  await Promise.all([initialize(peerA), initialize(peerATwin)]);
+  const claudeB = await mockPipe(t);
+  const peerB = startMcp(t, claudeEnv(setup), { parentProxy: true });
+  const sessionB = registerClaudeParent(setup, peerB.child.pid, claudeB.pipePath);
+  await initialize(peerB);
+
+  const delayed = callTool(peerA, 'send_to_codex', { thread_id: 'codex-target-a',
+    message: 'Delayed message from Claude A.', message_id: 'shared-id' });
+  delayed.catch(() => {});
+  await Promise.race([
+    setup.firstNotification,
+    delayed.then(response => assert.fail(`First delivery should remain in flight: ${JSON.stringify(response)}`)),
+  ]);
+  t.after(() => setup.releaseFirstNotification());
+  toolValue(await callTool(peerB, 'send_to_codex', { thread_id: 'codex-target-a',
+    message: 'Independent message from Claude B.', message_id: 'shared-id' }));
   assert.equal(setup.notifications.length, 2);
-  assert.match(setup.notifications[0].arguments.prompt, /Private A/);
-  assert.match(setup.notifications[1].arguments.prompt, /Private B/);
+  assert.match(setup.notifications[0].arguments.prompt, new RegExp(setup.sessionId));
+  assert.match(setup.notifications[1].arguments.prompt, new RegExp(sessionB));
+
+  // MCP requests are serialized per process. A second process of the same
+  // verified caller can inspect the ledger while the first send is pending.
+  const statusAInFlight = toolValue(await callTool(peerATwin, 'bridge_status'));
+  const statusBDone = toolValue(await callTool(peerB, 'bridge_status'));
+  assert.equal(statusAInFlight.messages.length, 1);
+  assert.equal(statusAInFlight.messages[0].status, 'sending');
+  assert.equal(statusBDone.messages.length, 1);
+  assert.equal(statusBDone.messages[0].status, 'submitted');
+  assert.doesNotMatch(JSON.stringify(statusAInFlight), /Independent message from Claude B/);
+  assert.doesNotMatch(JSON.stringify(statusBDone), /Delayed message from Claude A/);
 
   setup.releaseFirstNotification();
   toolValue(await delayed);
-  for (const [client, callerMetadata] of [[setup.client, meta], [peerB, undefined]]) {
-    const status = toolValue(await callTool(client, 'bridge_status', { limit: 100 }, callerMetadata));
-    assert.equal(status.messages.length, 2);
-    assert.ok(status.messages.every(message => message.pairId === newBinding.pairId));
-    assert.ok(status.messages.every(message => message.status === 'submitted'));
-    assert.doesNotMatch(JSON.stringify(status), /Private A/);
-  }
-  const oldStatus = toolValue(await callTool(peerA, 'bridge_status'));
-  assert.equal(oldStatus.connected, false);
-  assert.doesNotMatch(JSON.stringify(oldStatus), /Private B/);
-  assert.ok(isToolFailure(await callTool(peerA, 'send_to_codex', { message: 'Old pair must not reach replacement.' })));
+  const statusAFinished = toolValue(await callTool(peerA, 'bridge_status'));
+  assert.equal(statusAFinished.messages[0].status, 'submitted');
+  assert.equal(statusAFinished.messages[0].route.from.id, setup.sessionId);
+  assert.equal(statusBDone.messages[0].route.from.id, sessionB);
 });
 
-test('an unrelated abandoned state directory does not break Claude discovery, pairing, or messages', windowsOnly, async t => {
+test('an unrelated abandoned state directory does not break Claude discovery or direct messages', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const abandoned = path.join(setup.stateDir, 'f'.repeat(64));
   fs.mkdirSync(abandoned, { recursive: true });
   fs.writeFileSync(path.join(abandoned, 'unfinished.tmp'), 'Unrelated unfinished session initialization.');
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  assert.equal(toolValue(await callTool(peer, 'bridge_status')).connected, false);
+  assert.deepEqual(toolValue(await callTool(peer, 'bridge_status')).messages, []);
   assert.match(JSON.stringify(toolValue(await callTool(peer, 'list_codex_chats'))), /Target Codex A/);
-  toolValue(await callTool(peer, 'connect_codex', { thread_id: 'codex-target-a' }));
-  toolValue(await callTool(peer, 'send_to_codex', { message: 'Claude works despite unrelated incomplete state.', message_id: 'abandoned-directory-note' }));
+  toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'codex-target-a', message: 'Claude works despite unrelated incomplete state.', message_id: 'abandoned-directory-note' }));
   assert.equal(setup.notifications.length, 1);
   assert.equal(setup.notifications[0].arguments.threadId, 'codex-target-a');
   const status = toolValue(await callTool(peer, 'bridge_status'));
   assert.match(JSON.stringify(status), /Claude works despite unrelated incomplete state/);
-  toolValue(await callTool(peer, 'disconnect_bridge'));
   assert.equal(fs.readFileSync(path.join(abandoned, 'unfinished.tmp'), 'utf8'), 'Unrelated unfinished session initialization.');
 });

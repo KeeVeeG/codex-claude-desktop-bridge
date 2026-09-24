@@ -184,7 +184,7 @@ test('installer pins an explicit shared state override without changing portable
   assert.equal(fs.readFileSync(sourceFile, 'utf8'), sourceBefore);
 });
 
-test('staged Codex and Claude configurations start eight MCP tools from Unicode paths and an unrelated working directory', async t => {
+test('staged Codex and Claude configurations start five MCP tools from Unicode paths and an unrelated working directory', async t => {
   const { homeDir } = fixture(t);
   const sourceCodexPath = path.join(root, '.codex-plugin', 'plugin.json');
   const sourceClaudeConfigPath = path.join(root, '.mcp.json');
@@ -208,8 +208,7 @@ test('staged Codex and Claude configurations start eight MCP tools from Unicode 
   assert.equal(codex.cwd, './');
   assert.ok(codex.args.every(value => !value.includes('${CLAUDE_PLUGIN_ROOT}')));
   assert.ok(claude.args.some(value => value.includes('${CLAUDE_PLUGIN_ROOT}')));
-  const expectedTools = ['bridge_status', 'connect_claude', 'connect_codex', 'disconnect_bridge',
-    'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex'];
+  const expectedTools = ['bridge_status', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex'];
   for (const [application, config] of [['Codex', codex], ['Claude', claude]]) {
     assert.equal(config.env.CODEX_CLAUDE_BRIDGE_STATE_DIR, prepared.stateDir);
     const env = { ...process.env, ...config.env, HOME: homeDir, USERPROFILE: homeDir, LOCALAPPDATA: path.join(homeDir, `${application} app cache`) };

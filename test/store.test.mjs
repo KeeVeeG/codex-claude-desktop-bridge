@@ -224,6 +224,61 @@ test('the same external message ID belongs independently to each pair', async t 
   assert.throws(() => finishMessage(session, input.id, { status: 'submitted' }), /does not belong/);
 });
 
+test('direct messages with one ID are independent for each sender and recipient', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'direct-routes' });
+  const codex = { kind: 'codex', id: 'codex-chat' };
+  const claudeA = { kind: 'claude', id: 'claude-a' };
+  const claudeB = { kind: 'claude', id: 'claude-b' };
+  const toA = { from: codex, to: claudeA };
+  const toB = { from: codex, to: claudeB };
+  const fromA = { from: claudeA, to: codex };
+  const input = { id: 'shared-id', direction: 'to_claude', message: 'Hello.', route: toA };
+
+  assert.equal(recordMessage(session, input).created, true);
+  assert.equal(recordMessage(session, { ...input, route: toB }).created, true);
+  assert.equal(recordMessage(session, { ...input, direction: 'to_codex', route: fromA }).created, true);
+  assert.equal(recordMessage(session, input).created, false);
+  assert.throws(() => recordMessage(session, { ...input, message: 'Changed text.' }), /different content/);
+  assert.throws(() => recordMessage(session, { ...input, direction: 'to_codex' }), /direction does not match/);
+  assert.throws(() => finishMessage(session, 'shared-id', { status: 'submitted' }), /does not belong/);
+
+  const submitted = finishMessage(session, 'shared-id', { route: toA, status: 'submitted', receipt: { accepted: true } });
+  assert.deepEqual(submitted.route, toA);
+  assert.equal(getMessages(session).find(record => record.route?.to.id === 'claude-a').status, 'submitted');
+  assert.equal(getMessages(session).find(record => record.route?.to.id === 'claude-b').status, 'sending');
+  assert.equal(getMessages(session).find(record => record.route?.from.kind === 'claude').status, 'sending');
+  assert.equal(Object.keys(readSession(session).messages).filter(key => key.startsWith('route:')).length, 3);
+
+  recordMessage(session, { id: 'legacy', direction: 'to_claude', message: 'Old history.' });
+  recordMessage(session, { id: 'paired', pairId: 'old-pair', direction: 'to_claude', message: 'Old pair.' });
+  assert.equal(getMessages(session).length, 5);
+  assert.equal(getMessages(session, 1, undefined, codex).length, 1);
+  assert.equal(getMessages(session, 20, undefined, codex).length, 2);
+  assert.equal(getMessages(session, 20, undefined, claudeA).length, 1);
+  assert.deepEqual(getMessages(session, 20, undefined, claudeB), []);
+  assert.equal(getMessages(session, 20, 'old-pair').length, 1);
+});
+
+test('direct message routes reject malformed endpoints and cannot mix with legacy pairs', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'invalid-direct-routes' });
+  const codex = { kind: 'codex', id: 'codex-chat' };
+  const claude = { kind: 'claude', id: 'claude-chat' };
+  const route = { from: codex, to: claude };
+  const input = { id: 'one', direction: 'to_claude', message: 'Text.' };
+  for (const invalidRoute of [null, {}, { from: codex }, { from: codex, to: codex },
+    { from: codex, to: { ...claude, id: '' } }, { from: { ...codex, kind: 'other' }, to: claude },
+    { from: codex, to: { ...claude, extra: true } }, { ...route, extra: true }]) {
+    assert.throws(() => recordMessage(session, { ...input, route: invalidRoute }), /Invalid message route|must be nonempty/);
+    assert.throws(() => finishMessage(session, input.id, { status: 'submitted', route: invalidRoute }), /Invalid message route|must be nonempty/);
+  }
+  assert.throws(() => recordMessage(session, { ...input, route, pairId: 'old-pair' }), /cannot be combined/);
+  assert.throws(() => finishMessage(session, input.id, { route, pairId: 'old-pair', status: 'submitted' }), /cannot be combined/);
+  assert.throws(() => getMessages(session, 20, 'old-pair', codex), /cannot be combined/);
+  assert.throws(() => getMessages(session, 20, undefined, { ...codex, id: '' }), /must be nonempty/);
+});
+
 test('an in-flight outcome from a disconnected pair updates only its own partition', async t => {
   const setup = await fixture(t);
   const session = createSession({ ...setup, threadId: 're-paired-inflight' });

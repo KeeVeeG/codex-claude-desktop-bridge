@@ -6,7 +6,7 @@
     {
       "name": "codex-claude-desktop-bridge",
       "source": "./",
-      "description": "Connect a Codex Desktop task with a Claude Desktop Code session through native local messages."
+      "description": "Send direct native messages between Codex Desktop tasks and Claude Desktop Code sessions."
     }
   ]
 }
