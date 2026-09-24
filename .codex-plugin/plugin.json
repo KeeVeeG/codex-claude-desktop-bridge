@@ -7,6 +7,9 @@
     "name": "KeeVeeG",
     "url": "https://github.com/KeeVeeG"
   },
+  "homepage": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+  "repository": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+  "keywords": ["desktop", "messaging", "windows", "mcp"],
   "skills": "./skills/",
   "mcpServers": {
     "codex-claude-desktop-bridge": {
@@ -22,7 +25,9 @@
     "longDescription": "Pair a Codex task with a Claude Desktop Code session so either can send messages and delegate work.",
     "developerName": "KeeVeeG",
     "category": "Productivity",
-    "capabilities": [],
+    "capabilities": ["Write"],
+    "websiteURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+    "privacyPolicyURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge/blob/main/docs/PRIVACY.md",
     "defaultPrompt": "Connect this Codex task with a Claude Desktop Code conversation so we can exchange messages."
   }
 }

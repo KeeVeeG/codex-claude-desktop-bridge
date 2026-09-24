@@ -208,6 +208,126 @@ test('Windows recovery-guard contention retries exclusive acquisition before rem
     }
   });
 
+test('transient Windows sharing errors while reading another recovery guard do not grant ownership',
+  { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'guard-read-transient' });
+    const lock = path.join(session.dir, 'state.lock');
+    const recovery = path.join(session.dir, 'state.lock.recovery');
+    fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' }));
+    fs.writeFileSync(recovery, JSON.stringify({ pid: process.pid, token: 'other-guard' }));
+    const read = fs.readFileSync;
+    let reads = 0;
+    let callbacks = 0;
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === recovery) {
+        reads++;
+        assert.equal(fs.existsSync(lock), true, 'a failed guard read cannot remove the main lock');
+        if (reads <= 2) throw Object.assign(new Error('Temporary guard read contention'), { code: 'EPERM' });
+        fs.unlinkSync(recovery);
+        throw Object.assign(new Error('Other guard finished'), { code: 'ENOENT' });
+      }
+      return read(file, ...args);
+    });
+    updateSession(session, state => { callbacks++; state.counter = (state.counter ?? 0) + 1; });
+    assert.equal(reads, 3);
+    assert.equal(callbacks, 1);
+    assert.equal(readSession(session).counter, 1);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(fs.existsSync(recovery), false);
+  });
+
+test('transient Windows sharing errors under the recovery guard retry a fresh owner check and cleanup',
+  { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'guarded-recovery-transient' });
+    const lock = path.join(session.dir, 'state.lock');
+    const recovery = path.join(session.dir, 'state.lock.recovery');
+    fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' }));
+    const read = fs.readFileSync;
+    const unlink = fs.unlinkSync;
+    let mainReads = 0;
+    let mainUnlinks = 0;
+    let guardUnlinks = 0;
+    let callbacks = 0;
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === lock) {
+        mainReads++;
+        if (mainReads === 2 || mainReads === 3) {
+          throw Object.assign(new Error('Temporary guarded owner read contention'), { code: 'EPERM' });
+        }
+      }
+      return read(file, ...args);
+    });
+    t.mock.method(fs, 'unlinkSync', (file, ...args) => {
+      if (file === lock && ++mainUnlinks === 1) {
+        throw Object.assign(new Error('Temporary stale lock unlink contention'), { code: 'EPERM' });
+      }
+      if (file === recovery && ++guardUnlinks === 1) {
+        throw Object.assign(new Error('Temporary guard cleanup contention'), { code: 'EPERM' });
+      }
+      return unlink(file, ...args);
+    });
+    updateSession(session, state => { callbacks++; state.counter = (state.counter ?? 0) + 1; });
+    assert.ok(mainReads >= 5);
+    assert.ok(mainUnlinks >= 3);
+    assert.equal(guardUnlinks, 2);
+    assert.equal(callbacks, 1);
+    assert.equal(readSession(session).counter, 1);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(fs.existsSync(recovery), false);
+  });
+
+test('transient Windows sharing errors during main lock release trigger a fresh token check',
+  { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'release-transient' });
+    const lock = path.join(session.dir, 'state.lock');
+    const read = fs.readFileSync;
+    const unlink = fs.unlinkSync;
+    let reads = 0;
+    let unlinks = 0;
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === lock && ++reads <= 2) {
+        throw Object.assign(new Error('Temporary release read contention'), { code: 'EPERM' });
+      }
+      return read(file, ...args);
+    });
+    t.mock.method(fs, 'unlinkSync', (file, ...args) => {
+      if (file === lock && ++unlinks === 1) {
+        throw Object.assign(new Error('Temporary release unlink contention'), { code: 'EPERM' });
+      }
+      return unlink(file, ...args);
+    });
+    updateSession(session, state => { state.counter = (state.counter ?? 0) + 1; });
+    assert.ok(reads >= 4);
+    assert.equal(unlinks, 2);
+    assert.equal(readSession(session).counter, 1);
+    assert.equal(fs.existsSync(lock), false);
+  });
+
+test('release retry preserves a replacement main lock with a different token',
+  { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'release-replacement' });
+    const lock = path.join(session.dir, 'state.lock');
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement-owner' });
+    const unlink = fs.unlinkSync;
+    let replaced = false;
+    t.mock.method(fs, 'unlinkSync', (file, ...args) => {
+      if (file === lock && !replaced) {
+        replaced = true;
+        fs.writeFileSync(lock, replacement);
+        throw Object.assign(new Error('Lock changed while release was pending'), { code: 'EPERM' });
+      }
+      return unlink(file, ...args);
+    });
+    updateSession(session, state => { state.counter = (state.counter ?? 0) + 1; });
+    assert.equal(replaced, true);
+    assert.equal(fs.readFileSync(lock, 'utf8'), replacement);
+    assert.equal(readSession(session).counter, 1);
+  });
+
 test('a non-transient recovery-guard error propagates once without removing a lock', async t => {
   const setup = await fixture(t);
   const session = createSession({ ...setup, threadId: 'guard-permanent' });

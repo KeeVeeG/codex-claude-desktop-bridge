@@ -17,7 +17,7 @@ const runtimeFiles = [
   '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', '.mcp.json',
   'lib/store.mjs', 'lib/claude-desktop.mjs', 'lib/codex-desktop.mjs',
   'lib/desktop-service.mjs', 'lib/codex-host.mjs', 'scripts/mcp.mjs',
-  'skills/claude-bridge/SKILL.md', 'package.json', 'README.md', 'LICENSE',
+  'skills/claude-bridge/SKILL.md', 'package.json', 'README.md', 'LICENSE', 'SECURITY.md',
   'docs/PRIVACY.md', 'docs/PUBLISHING.md',
 ];
 export { runtimeFiles as RUNTIME_FILES };
