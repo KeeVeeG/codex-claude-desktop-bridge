@@ -87,6 +87,44 @@ test('simultaneous crash recovery never unlinks a replacement lock or loses upda
   assert.equal(fs.existsSync(path.join(session.dir, 'state.lock.recovery')), false);
 });
 
+test('transient Windows sharing errors retry opening and reading the main lock',
+  { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
+    for (const phase of ['open', 'read']) {
+      for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+        await t.test(`${phase}: ${code}`, async sub => {
+          const setup = await fixture(sub);
+          const session = createSession({ ...setup, threadId: `main-lock-${phase}-${code}` });
+          const lock = path.join(session.dir, 'state.lock');
+          if (phase === 'read') fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' }));
+          let attempts = 0;
+          let callbacks = 0;
+          if (phase === 'open') {
+            const original = fs.openSync;
+            sub.mock.method(fs, 'openSync', (file, flags, ...args) => {
+              if (file === lock && flags === 'wx' && ++attempts <= 2) {
+                throw Object.assign(new Error('Temporary main lock sharing violation'), { code });
+              }
+              return original(file, flags, ...args);
+            });
+          } else {
+            const original = fs.readFileSync;
+            sub.mock.method(fs, 'readFileSync', (file, ...args) => {
+              if (file === lock && ++attempts <= 2) {
+                throw Object.assign(new Error('Temporary main lock sharing violation'), { code });
+              }
+              return original(file, ...args);
+            });
+          }
+          updateSession(session, state => { callbacks++; state.counter = (state.counter ?? 0) + 1; });
+          assert.ok(attempts >= 3);
+          assert.equal(callbacks, 1);
+          assert.equal(readSession(session).counter, 1);
+          assert.equal(fs.existsSync(lock), false);
+        });
+      }
+    }
+  });
+
 test('an old live owner is waited for and never stolen', { timeout: 15_000 }, async t => {
   const setup = await fixture(t);
   const session = createSession({ ...setup, threadId: 'live-owner' });
