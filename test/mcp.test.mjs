@@ -145,6 +145,8 @@ async function setupMcp(t, { envThreadId, holdFirstNotification = false } = {}) 
       } else {
         assert.equal(message.method, 'tools/call');
         assert.equal(message.params.tool, 'send_message_to_thread');
+        assert.equal(message.params.callerSource, 'codex');
+        assert.ok(message.params.threadId);
         notifications.push(message.params);
         const acknowledge = () => socket.write(encodeFrame({ jsonrpc: '2.0', id: message.id, result: { success: true, contentItems: [] } }));
         if (holdFirstNotification && notifications.length === 1) releaseHeldNotification = acknowledge;
@@ -222,6 +224,21 @@ test('MCP advertises direct, addressed messages without pair-management tools or
   assert.ok(isToolFailure(await callTool(client, 'connect_claude', { session_id: 'unused' })));
   assert.ok(isToolFailure(await callTool(client, 'disconnect_bridge')));
   assert.deepEqual((await client.rpc('ping')).result, {});
+});
+
+test('Codex MCP startup refreshes a previous host after restart without a startup task ID', async t => {
+  const fixture = await nativeFixture(t);
+  const livePipe = await mockPipe(t, { framed: true });
+  const { publishCodexHost, getCodexHost } = await import('../lib/codex-host.mjs');
+  publishCodexHost({ stateDir: fixture.stateDir, pipePath: '\\\\.\\pipe\\previous-codex-app',
+    threadId: 'previous-real-task', pid: 2_147_483_647 });
+  const client = startMcp(t, { CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir,
+    CODEX_APP_TOOLS_PIPE_PATH: livePipe.pipePath });
+  await initialize(client);
+  const host = getCodexHost({ stateDir: fixture.stateDir });
+  assert.equal(host.pipePath, livePipe.pipePath);
+  assert.equal(host.threadId, 'previous-real-task');
+  assert.equal(host.pid, client.child.pid);
 });
 
 test('Codex and Claude can initiate independent addressed messages without a connection or reply', windowsOnly, async t => {
@@ -308,6 +325,23 @@ test('message IDs deduplicate concurrent submissions from separate MCP processes
   ])) toolValue(response);
   assert.equal(setup.notifications.length, 1);
   assert.ok(isToolFailure(await callTool(peer, 'send_to_codex', { ...inbound, message: 'Changed observation.' })));
+});
+
+test('a failed delivery cannot look successful when retried with the same message ID', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const peer = startMcp(t, claudeEnv(setup));
+  await initialize(peer);
+  await setup.codex.close();
+  const args = { thread_id: 'codex-target-a', message: 'An undelivered update.', message_id: 'failed-delivery' };
+  const first = await callTool(peer, 'send_to_codex', args);
+  assert.ok(isToolFailure(first));
+  assert.match(JSON.stringify(first), /ENOENT/);
+  const repeated = await callTool(peer, 'send_to_codex', args);
+  assert.ok(isToolFailure(repeated));
+  assert.match(JSON.stringify(repeated), /new message_id/);
+  const status = toolValue(await callTool(peer, 'bridge_status'));
+  assert.equal(status.messages.length, 1);
+  assert.equal(status.messages[0].status, 'failed');
 });
 
 test('shared-server Codex metadata isolates sibling tasks and rejects malformed identities', windowsOnly, async t => {

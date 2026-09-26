@@ -159,10 +159,11 @@ export async function runMcpServer({ input = process.stdin, output = process.std
         rpcError(message.id, -32602, 'initialize requires a protocolVersion string.');
         return;
       }
-      if (env.CODEX_APP_TOOLS_PIPE_PATH && env.CODEX_THREAD_ID) {
-        const { publishCodexHost } = await import('../lib/codex-host.mjs');
-        publishCodexHost({ stateDir: env.CODEX_CLAUDE_BRIDGE_STATE_DIR,
-          pipePath: env.CODEX_APP_TOOLS_PIPE_PATH, threadId: env.CODEX_THREAD_ID });
+      if (env.CODEX_APP_TOOLS_PIPE_PATH) {
+        const { publishCodexHost, getCodexHost } = await import('../lib/codex-host.mjs');
+        const threadId = env.CODEX_THREAD_ID || getCodexHost({ stateDir: env.CODEX_CLAUDE_BRIDGE_STATE_DIR })?.threadId;
+        if (threadId) publishCodexHost({ stateDir: env.CODEX_CLAUDE_BRIDGE_STATE_DIR,
+          pipePath: env.CODEX_APP_TOOLS_PIPE_PATH, threadId });
       }
       initializeReceived = true;
       respond({

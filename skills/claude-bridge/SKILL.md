@@ -31,7 +31,7 @@ Call `send_to_codex` with the selected `thread_id`, `message`, and optionally a 
 
 Each message identifies its verified source conversation. To reply, use that source's exact `thread_id` or `session_id` as the destination in the corresponding send tool. Do not infer a destination from the most recent conversation or treat a shared project folder as an address. Another sender may message the same recipient at any time. Do not require a response to an informational message or treat silence as a failure.
 
-`bridge_status` inspects the caller's recent outgoing delivery records; optional `limit` is 1–100. Use it for uncertain delivery rather than busy-polling. Preserve the exact destination, `message_id`, and text when investigating the same uncertain submission. A different destination or ID can create a separate delivery. Transport delivery does not prove the other agent has read or acted on the message.
+`bridge_status` inspects the caller's recent outgoing delivery records; optional `limit` is 1–100. Use it for uncertain delivery rather than busy-polling. Preserve the exact destination, `message_id`, and text when investigating the same uncertain submission. A failed record is not resent under the same ID; inspect the destination, then use a new `message_id` to retry. A different destination or ID can create a separate delivery. Transport delivery does not prove the other agent has read or acted on the message.
 
 There is no connection to release before choosing another conversation. A sent message cannot be recalled through this bridge, and ongoing work is not stopped by sending another message. Use the receiving application's normal stop control when execution must stop.
 

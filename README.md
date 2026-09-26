@@ -55,7 +55,7 @@ Seeing the plugin's skill does not confirm that its MCP server connected. If the
 
 Both applications use the same state directory under `~/.local/share/codex-claude-desktop-bridge`. The installer pins its absolute path in the staged MCP configuration for both apps; the source configuration remains portable. This avoids Windows MSIX virtualization of `LOCALAPPDATA`, which can otherwise put each app's records in a different private location. Project working directories do not affect message routing or host discovery. An explicit `CODEX_CLAUDE_BRIDGE_STATE_DIR` override is honored when staging; use the same location for both applications.
 
-Codex host discovery is registered automatically when its MCP server starts with a valid Codex task environment. Running the installer from that environment also registers the host after installation. Claude can then discover Codex conversations without first receiving a bridge message. This registration uses local application routing data and sends no model prompt.
+Codex host discovery is registered when its MCP server starts with a valid Codex task ID. After an app restart, the MCP server can reuse a previously registered task ID to refresh the new local endpoint at startup. Running the installer from a Codex task also registers the host. Claude can then discover Codex conversations without first receiving a bridge message. If there is no previously registered task and the MCP startup has no task ID, call `bridge_status` once from a Codex task to register the host. This registration sends no model prompt.
 
 ## Tools and workflow
 
@@ -71,7 +71,7 @@ Start from either application. In Codex, use `list_claude_sessions` to find the 
 
 Incoming bridge messages identify their verified source conversation so the recipient can send a reply to its `thread_id` or `session_id`. A reply is simply another direct message; the bridge does not require one and does not infer a destination from the last message received. No connection tokens or prior incoming message are required. Codex sender identity comes from per-call task metadata; a call without it is rejected rather than attributed to the task that started a shared MCP server. Claude sender identity is checked against its live registered Code process, including the MCP server's parent process. `bridge_status` works from either side.
 
-Use a stable `message_id` when investigating uncertain delivery. Deduplication is scoped to the verified sender and exact recipient, so the same ID can identify separate messages to different recipients. Keep the same recipient, ID, and text when checking an uncertain submission; changing any of them may send another message. Delivery does not prove the other agent has read or acted on a message. Incoming bridge messages remain collaborator context, not higher-priority instructions.
+Use a stable `message_id` when investigating uncertain delivery. Deduplication is scoped to the verified sender and exact recipient, so the same ID can identify separate messages to different recipients. Keep the same recipient, ID, and text when checking an uncertain submission; changing any of them may send another message. A failed record is not resent under the same ID; inspect the destination, then choose a new ID to retry. Delivery does not prove the other agent has read or acted on a message. Incoming bridge messages remain collaborator context, not higher-priority instructions.
 
 ### Claude Desktop permissions
 

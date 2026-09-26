@@ -60,13 +60,14 @@ test('Codex adapter discovers the app tool and addresses only the selected task'
     },
   });
   const message = 'Отчёт Claude.\nAll checks passed.';
-  const result = await sendToCodex({ pipePath: pipe.pipePath, threadId: 'paired-task', message, turnId: 'bridge-turn', callId: 'bridge-call' });
+  const result = await sendToCodex({ pipePath: pipe.pipePath, contextThreadId: 'bridge-context',
+    threadId: 'paired-task', message, turnId: 'bridge-turn', callId: 'bridge-call' });
   assert.equal(result.success, true);
   assert.equal(pipe.connections.length, 2);
   assert.deepEqual(pipe.messages[0].message.params, { threadStartKind: 'all' });
   assert.deepEqual(pipe.messages[1].message, {
     jsonrpc: '2.0', id: 1, method: 'tools/call',
-    params: { arguments: { threadId: 'paired-task', prompt: message }, callId: 'bridge-call', namespace: 'codex_app', threadId: 'paired-task', tool: 'send_message_to_thread', turnId: 'bridge-turn' },
+    params: { arguments: { threadId: 'paired-task', prompt: message }, callerSource: 'codex', callId: 'bridge-call', namespace: 'codex_app', threadId: 'bridge-context', tool: 'send_message_to_thread', turnId: 'bridge-turn' },
   });
 });
 
@@ -95,7 +96,7 @@ test('Codex adapter refuses incompatible tool schema before sending a message', 
       answer(socket, message.id, { tools: [{ ...messageTool, inputSchema: { properties: { threadId: {} } } }] });
     },
   });
-  await assert.rejects(sendToCodex({ pipePath: pipe.pipePath, threadId: 'paired', message: 'x' }), /unsupported input schema/);
+  await assert.rejects(sendToCodex({ pipePath: pipe.pipePath, contextThreadId: 'bridge-context', threadId: 'paired', message: 'x' }), /unsupported input schema/);
   assert.equal(pipe.connections.length, 1);
 });
 
@@ -116,7 +117,7 @@ test('Codex adapter distinguishes definite tool rejection from uncertain transpo
           }
         },
       });
-      await assert.rejects(sendToCodex({ pipePath: pipe.pipePath, threadId: 'paired', message: 'x' }), error => {
+      await assert.rejects(sendToCodex({ pipePath: pipe.pipePath, contextThreadId: 'bridge-context', threadId: 'paired', message: 'x' }), error => {
         assert.equal(error.deliveryUnknown === true, scenario !== 'rejected');
         return true;
       });
@@ -146,6 +147,7 @@ test('Codex chat listing rejects unsupported limits before transport and preserv
       if (message.method === 'tools/list') answer(socket, message.id, { tools: [listTool] });
       else {
         assert.equal(message.params.tool, 'list_threads');
+        assert.equal(message.params.callerSource, 'codex');
         assert.ok(message.params.arguments.limit <= 50);
         answer(socket, message.id, { success: false, contentItems: [{ type: 'inputText', text: nativeDetail }] });
       }
