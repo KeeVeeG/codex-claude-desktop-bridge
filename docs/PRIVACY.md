@@ -12,7 +12,7 @@ By default, state is stored under `~/.local/share/codex-claude-desktop-bridge` i
 
 - Outgoing message text, IDs, sender and destination identifiers, timestamps, fingerprints, delivery status, and available transport receipts/errors.
 - Conversation names, registry paths, and local routing addresses.
-- A Codex host-discovery record with its local pipe address, context thread ID, and process metadata.
+- A Codex host-discovery record with recent local pipe addresses, context task IDs, and process metadata.
 
 These are ordinary local JSON files, not application-level encrypted storage. The bridge does not implement automatic retention expiry or a message recall operation. Local delivery records remain until the bridge state is removed; messages already delivered to either application remain under that application's controls. Version 0.1.0 also stored one-to-one routing metadata; upgrading does not automatically erase those older local records.
 

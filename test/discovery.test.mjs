@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { canonicalClaudeSocket, resolveClaudeCaller } from '../lib/claude-desktop.mjs';
-import { getCodexHost, publishCodexHost } from '../lib/codex-host.mjs';
+import { getCodexHost, getCodexHosts, publishCodexHost } from '../lib/codex-host.mjs';
 import { nativeFixture } from './native-helpers.mjs';
 
 const windowsOnly = { skip: process.platform !== 'win32' && 'Native Claude Desktop process metadata is Windows-specific.' };
@@ -81,7 +81,40 @@ test('Codex host publication is atomic and survives publisher exit without an ar
   assert.equal(getCodexHost({ stateDir: setup.stateDir }).threadId, 'known-context');
   const second = publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\codex-host-test-2', threadId: 'new-context' });
   assert.deepEqual(getCodexHost({ stateDir: setup.stateDir }), second);
+  assert.deepEqual(getCodexHosts({ stateDir: setup.stateDir }), [second, { ...first, pid: 2_147_483_647, publishedAt: 1 }]);
   assert.deepEqual(fs.readdirSync(setup.stateDir), ['codex-host.json']);
+});
+
+test('Codex host publication retries Windows sharing contention', windowsOnly, async t => {
+  const setup = await nativeFixture(t);
+  const rename = fs.renameSync;
+  let attempts = 0;
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (destination === path.join(setup.stateDir, 'codex-host.json') && attempts++ < 2) {
+      throw Object.assign(new Error('Transient sharing violation'), { code: 'EPERM' });
+    }
+    return rename(source, destination);
+  });
+  const record = publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\codex-host-test', threadId: 'known-context' });
+  assert.equal(attempts, 3);
+  assert.deepEqual(getCodexHost({ stateDir: setup.stateDir }), record);
+});
+
+test('Codex host reader retries a replacement between stat and open', async t => {
+  const setup = await nativeFixture(t);
+  const record = publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\codex-host-test', threadId: 'known-context' });
+  const registryFile = path.join(setup.stateDir, 'codex-host.json');
+  const open = fs.openSync;
+  let raced = false;
+  t.mock.method(fs, 'openSync', (file, flags, mode) => {
+    if (file === registryFile && !raced) {
+      raced = true;
+      throw Object.assign(new Error('Registry replaced'), { code: 'ENOENT' });
+    }
+    return open(file, flags, mode);
+  });
+  assert.deepEqual(getCodexHost({ stateDir: setup.stateDir }), record);
+  assert.equal(raced, true);
 });
 
 test('Codex host rejects remote endpoints, invalid context, and malformed registry contents', async t => {

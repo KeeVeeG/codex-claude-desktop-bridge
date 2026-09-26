@@ -118,7 +118,7 @@ test('Codex adapter distinguishes definite tool rejection from uncertain transpo
         },
       });
       await assert.rejects(sendToCodex({ pipePath: pipe.pipePath, contextThreadId: 'bridge-context', threadId: 'paired', message: 'x' }), error => {
-        assert.equal(error.deliveryUnknown === true, scenario !== 'rejected');
+        assert.equal(error.deliveryUnknown, true);
         return true;
       });
       assert.equal(pipe.messages.filter(entry => entry.message.method === 'tools/call').length, 1, 'must not retry a mutating call');
@@ -178,4 +178,18 @@ test('Codex chat listing bounds native diagnostic text instead of returning an u
     assert.ok(error.message.length <= 2100, 'native detail is bounded to 2000 characters plus a short error prefix');
     return true;
   });
+});
+
+test('Codex chat listing explains a rejected registered context without guessing another task', async t => {
+  const listTool = { name: 'list_threads', namespace: 'codex_app' };
+  const pipe = await mockPipe(t, {
+    framed: true,
+    onMessage(message, socket) {
+      if (message.method === 'tools/list') answer(socket, message.id, { tools: [listTool] });
+      else socket.write(encodeFrame({ jsonrpc: '2.0', id: message.id,
+        error: { code: -32603, message: 'Codex app tool request failed' } }));
+    },
+  });
+  await assert.rejects(listCodexChats({ pipePath: pipe.pipePath, contextThreadId: 'deleted-task' }),
+    /rejected the registered task context/);
 });

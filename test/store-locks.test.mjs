@@ -87,9 +87,55 @@ test('simultaneous crash recovery never unlinks a replacement lock or loses upda
   assert.equal(fs.existsSync(path.join(session.dir, 'state.lock.recovery')), false);
 });
 
-test('transient Windows sharing errors retry opening and reading the main lock',
+test('a crash around atomic lock publication leaves either no lock or a recoverable complete lock', async t => {
+  for (const phase of ['before-link', 'after-link']) {
+    await t.test(phase, async sub => {
+      const setup = await fixture(sub);
+      const session = createSession({ ...setup, threadId: phase });
+      const lock = path.join(session.dir, 'state.lock');
+      const child = worker(sub, `
+        import fs from 'node:fs';
+        import { loadSession, updateSession } from ${JSON.stringify(storeUrl)};
+        const [stateDir, sessionKey, lock, phase] = process.argv.slice(1);
+        const original = fs.linkSync;
+        fs.linkSync = (source, destination) => {
+          if (destination === lock) {
+            if (phase === 'after-link') original(source, destination);
+            process.exit(phase === 'after-link' ? 38 : 37);
+          }
+          return original(source, destination);
+        };
+        process.stdout.write('ready\\n');
+        updateSession(loadSession({ stateDir, sessionKey }), state => { state.unexpected = true; });
+      `, [setup.stateDir, session.key, lock, phase]);
+      await child.ready;
+      const result = await child.exited;
+      assert.equal(result.code, phase === 'after-link' ? 38 : 37, result.stderr);
+      assert.equal(fs.existsSync(lock), phase === 'after-link');
+      if (phase === 'after-link') assert.doesNotThrow(() => JSON.parse(fs.readFileSync(lock, 'utf8')));
+      updateSession(session, state => { state.recovered = true; });
+      assert.equal(readSession(session).recovered, true);
+      assert.equal(readSession(session).unexpected, undefined);
+      assert.equal(fs.existsSync(lock), false);
+    });
+  }
+});
+
+test('a reused live PID does not keep a lock owned by an earlier process',
+  { skip: process.platform !== 'win32' && 'Windows process creation identity is platform-specific.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'reused-pid' });
+    const lock = path.join(session.dir, 'state.lock');
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'earlier-process',
+      createdAt: Date.now() - 2000, procStartMs: 1 }));
+    updateSession(session, state => { state.recovered = true; });
+    assert.equal(readSession(session).recovered, true);
+    assert.equal(fs.existsSync(lock), false);
+  });
+
+test('transient Windows sharing errors retry linking and reading the main lock',
   { skip: process.platform !== 'win32' && 'Windows sharing violations are platform-specific.' }, async t => {
-    for (const phase of ['open', 'read']) {
+    for (const phase of ['link', 'read']) {
       for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
         await t.test(`${phase}: ${code}`, async sub => {
           const setup = await fixture(sub);
@@ -98,13 +144,13 @@ test('transient Windows sharing errors retry opening and reading the main lock',
           if (phase === 'read') fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' }));
           let attempts = 0;
           let callbacks = 0;
-          if (phase === 'open') {
-            const original = fs.openSync;
-            sub.mock.method(fs, 'openSync', (file, flags, ...args) => {
-              if (file === lock && flags === 'wx' && ++attempts <= 2) {
+          if (phase === 'link') {
+            const original = fs.linkSync;
+            sub.mock.method(fs, 'linkSync', (source, destination) => {
+              if (destination === lock && ++attempts <= 2) {
                 throw Object.assign(new Error('Temporary main lock sharing violation'), { code });
               }
-              return original(file, flags, ...args);
+              return original(source, destination);
             });
           } else {
             const original = fs.readFileSync;
@@ -186,17 +232,16 @@ test('Windows recovery-guard contention retries exclusive acquisition before rem
         const recovery = path.join(session.dir, 'state.lock.recovery');
         const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
         fs.writeFileSync(lock, stale);
-        const open = fs.openSync;
+        const link = fs.linkSync;
         let attempts = 0;
         let callbacks = 0;
-        sub.mock.method(fs, 'openSync', (file, flags, ...args) => {
-          if (file === recovery) {
+        sub.mock.method(fs, 'linkSync', (source, destination) => {
+          if (destination === recovery) {
             attempts++;
-            assert.equal(flags, 'wx');
             assert.equal(fs.readFileSync(lock, 'utf8'), stale, 'failed guard acquisition cannot remove the main lock');
             if (attempts <= 2) throw Object.assign(new Error('Temporary recovery guard contention'), { code });
           }
-          return open(file, flags, ...args);
+          return link(source, destination);
         });
         updateSession(session, state => { callbacks++; state.counter = (state.counter ?? 0) + 1; });
         assert.equal(attempts, 3);
@@ -335,12 +380,12 @@ test('a non-transient recovery-guard error propagates once without removing a lo
   const recovery = path.join(session.dir, 'state.lock.recovery');
   const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
   fs.writeFileSync(lock, stale);
-  const open = fs.openSync;
+  const link = fs.linkSync;
   const expected = Object.assign(new Error('Permanent guard creation failure'), { code: 'EIO' });
   let attempts = 0;
-  t.mock.method(fs, 'openSync', (file, ...args) => {
-    if (file === recovery) { attempts++; throw expected; }
-    return open(file, ...args);
+  t.mock.method(fs, 'linkSync', (source, destination) => {
+    if (destination === recovery) { attempts++; throw expected; }
+    return link(source, destination);
   });
   assert.throws(() => updateSession(session, state => { state.unexpected = true; }), error => error === expected);
   assert.equal(attempts, 1);
@@ -357,14 +402,14 @@ test('persistent Windows recovery-guard contention stops at the existing deadlin
     const recovery = path.join(session.dir, 'state.lock.recovery');
     const stale = JSON.stringify({ pid: DEAD_PID, token: 'dead-owner' });
     fs.writeFileSync(lock, stale);
-    const open = fs.openSync;
+    const link = fs.linkSync;
     const expected = Object.assign(new Error('Recovery guard remains busy'), { code: 'EPERM' });
     let attempts = 0;
     let now = 100_000;
     t.mock.method(Date, 'now', () => { now += 1000; return now; });
-    t.mock.method(fs, 'openSync', (file, ...args) => {
-      if (file === recovery) { attempts++; throw expected; }
-      return open(file, ...args);
+    t.mock.method(fs, 'linkSync', (source, destination) => {
+      if (destination === recovery) { attempts++; throw expected; }
+      return link(source, destination);
     });
     assert.throws(() => updateSession(session, state => { state.unexpected = true; }), error => error === expected);
     assert.equal(attempts, 5);
@@ -381,17 +426,17 @@ test('recovery retry rereads ownership and never removes a live replacement lock
     const recovery = path.join(session.dir, 'state.lock.recovery');
     fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: 'old-owner' }));
     const live = JSON.stringify({ pid: process.pid, token: 'live-replacement' });
-    const open = fs.openSync;
+    const link = fs.linkSync;
     let attempts = 0;
     let now = 100_000;
     t.mock.method(Date, 'now', () => { now += 1000; return now; });
-    t.mock.method(fs, 'openSync', (file, ...args) => {
-      if (file === recovery) {
+    t.mock.method(fs, 'linkSync', (source, destination) => {
+      if (destination === recovery) {
         attempts++;
         fs.writeFileSync(lock, live);
         throw Object.assign(new Error('Guard creation raced with another owner'), { code: 'EPERM' });
       }
-      return open(file, ...args);
+      return link(source, destination);
     });
     assert.throws(() => updateSession(session, state => { state.unexpected = true; }), /Bridge state is busy/);
     assert.equal(attempts, 1);

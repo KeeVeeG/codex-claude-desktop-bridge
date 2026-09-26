@@ -365,7 +365,8 @@ export async function main(args = process.argv.slice(2)) {
     return prepared;
   }
   installApplications(prepared);
-  if (process.env.CODEX_APP_TOOLS_PIPE_PATH && process.env.CODEX_THREAD_ID) {
+  if (process.env.CODEX_APP_TOOLS_PIPE_PATH && process.env.CODEX_THREAD_ID &&
+      !process.env.CLAUDE_CODE_MESSAGING_SOCKET) {
     const { publishCodexHost } = await import('../lib/codex-host.mjs');
     publishCodexHost({ stateDir: prepared.stateDir,
       pipePath: process.env.CODEX_APP_TOOLS_PIPE_PATH, threadId: process.env.CODEX_THREAD_ID });

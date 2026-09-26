@@ -68,7 +68,7 @@ test('both directions allow multiple messages without deadlines or a required re
   }
   updateSession(session, state => { state.messages.one.createdAt = 1; });
   assert.equal(getMessages(session).length, 4);
-  assert.equal(getMessages(session).find(item => item.id === 'one').status, 'sending');
+  assert.equal(getMessages(session).find(item => item.id === 'one').status, 'uncertain');
   assert.equal('activeRequestId' in readSession(session), false);
 });
 
@@ -88,6 +88,21 @@ test('same message ID is idempotent after uncertain outcomes and rejects changed
   ]) assert.throws(() => recordMessage(session, changed), /different content or direction/);
   assert.equal(getMessages(session).length, 1);
   assert.equal(recordMessage(session, { ...input, id: 'another-id' }).created, true);
+});
+
+test('an interrupted send becomes uncertain without repeating its delivery', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'interrupted' });
+  const input = { id: 'interrupted-id', direction: 'to_codex', message: 'Possibly delivered.' };
+  recordMessage(session, input);
+  updateSession(session, state => {
+    state.messages['interrupted-id'].senderPid = 2_147_483_647;
+  });
+  assert.equal(getMessages(session)[0].status, 'uncertain');
+  const repeated = recordMessage(session, input);
+  assert.equal(repeated.created, false);
+  assert.equal(repeated.message.status, 'uncertain');
+  assert.equal(readSession(session).messages['interrupted-id'].status, 'uncertain');
 });
 
 test('transport outcomes persist independently and do not block later messages', async t => {
@@ -147,7 +162,7 @@ test('validation uses UTF-8 bytes and preserves arbitrary Unicode text unchanged
   const unicode = recordMessage(session, { direction: 'to_claude', message });
   assert.equal(unicode.message.message, message);
   assert.equal(getMessages(session)[0].message, message);
-  assert.deepEqual(Object.keys(unicode.message).sort(), ['id', 'direction', 'message', 'createdAt', 'status', 'fingerprint'].sort());
+  assert.deepEqual(Object.keys(unicode.message).sort(), ['id', 'direction', 'message', 'createdAt', 'senderPid', 'status', 'fingerprint'].sort());
   const result = recordMessage(session, { direction: 'to_claude', message: 'я'.repeat(32_768) });
   assert.equal(Buffer.byteLength(result.message.message), 65_536);
   assert.equal(recordMessage(session, { direction: 'to_codex', message: 'x'.repeat(65_536) }).created, true);

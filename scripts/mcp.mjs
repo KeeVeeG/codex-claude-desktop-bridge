@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { MAX_CODEX_CHAT_LIMIT } from '../lib/codex-desktop.mjs';
 
@@ -159,7 +160,11 @@ export async function runMcpServer({ input = process.stdin, output = process.std
         rpcError(message.id, -32602, 'initialize requires a protocolVersion string.');
         return;
       }
-      if (env.CODEX_APP_TOOLS_PIPE_PATH) {
+      const claudeRegistry = env.CODEX_CLAUDE_BRIDGE_REGISTRY_DIR ||
+        path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'sessions');
+      const fromClaude = Boolean(env.CLAUDE_CODE_MESSAGING_SOCKET) ||
+        fs.existsSync(path.join(claudeRegistry, `${process.ppid}.json`));
+      if (env.CODEX_APP_TOOLS_PIPE_PATH && !fromClaude) {
         const { publishCodexHost, getCodexHost } = await import('../lib/codex-host.mjs');
         const threadId = env.CODEX_THREAD_ID || getCodexHost({ stateDir: env.CODEX_CLAUDE_BRIDGE_STATE_DIR })?.threadId;
         if (threadId) publishCodexHost({ stateDir: env.CODEX_CLAUDE_BRIDGE_STATE_DIR,

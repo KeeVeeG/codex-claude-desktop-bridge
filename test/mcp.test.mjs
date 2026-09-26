@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { createSession, getSession, readSession, updateSession, recordMessage } from '../lib/store.mjs';
+import { createSession, getSession, readSession, updateSession, recordMessage, finishMessage } from '../lib/store.mjs';
 import { nativeFixture, mockPipe, encodeFrame, messageTool } from './native-helpers.mjs';
 
 const serverPath = fileURLToPath(new URL('../scripts/mcp.mjs', import.meta.url));
@@ -117,7 +117,7 @@ function isToolFailure(response) {
   return Boolean(response.error || response.result?.isError);
 }
 
-async function setupMcp(t, { envThreadId, holdFirstNotification = false } = {}) {
+async function setupMcp(t, { envThreadId, holdFirstNotification = false, rejectedContextIds = [] } = {}) {
   const fixture = await nativeFixture(t);
   const claude = await mockPipe(t);
   const notifications = [];
@@ -137,6 +137,11 @@ async function setupMcp(t, { envThreadId, holdFirstNotification = false } = {}) 
         socket.write(encodeFrame({ jsonrpc: '2.0', id: message.id, result: { tools: [messageTool, listThreadsTool] } }));
       } else if (message.params.tool === 'list_threads') {
         catalogCalls.push(message.params);
+        if (rejectedContextIds.includes(message.params.threadId)) {
+          socket.write(encodeFrame({ jsonrpc: '2.0', id: message.id,
+            error: { code: -32603, message: 'Codex app tool request failed' } }));
+          return;
+        }
         const limit = message.params.arguments.limit;
         const result = !Number.isInteger(limit) || limit < 1 || limit > 50
           ? { success: false, contentItems: [{ type: 'inputText', text: 'Invalid list_threads arguments: limit must be an integer between 1 and 50.' }] }
@@ -172,7 +177,7 @@ async function setupMcp(t, { envThreadId, holdFirstNotification = false } = {}) 
     CODEX_APP_TOOLS_PIPE_PATH: codex.pipePath,
     ...(envThreadId ? { CODEX_THREAD_ID: envThreadId } : {}),
   };
-  const client = startMcp(t, env);
+  const client = startMcp(t, env, { parentProxy: true });
   await initialize(client);
   return { ...fixture, registryDir, sessionId, token, claude, codex, notifications, catalogCalls, codexChats, env, client,
     firstNotification, releaseFirstNotification() { releaseHeldNotification?.(); releaseHeldNotification = undefined; } };
@@ -241,6 +246,27 @@ test('Codex MCP startup refreshes a previous host after restart without a startu
   assert.equal(host.pid, client.child.pid);
 });
 
+test('Claude ignores inherited Codex routing variables and does not replace its host', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const { getCodexHost } = await import('../lib/codex-host.mjs');
+  const peer = startMcp(t, { ...claudeEnv(setup), CODEX_APP_TOOLS_PIPE_PATH: '\\\\.\\pipe\\stale-inherited-codex',
+    CODEX_THREAD_ID: 'inherited-codex-task', CLAUDE_CODE_MESSAGING_SOCKET: setup.claude.pipePath });
+  await initialize(peer);
+  assert.equal(getCodexHost({ stateDir: setup.stateDir }).pipePath, setup.codex.pipePath);
+  const status = toolValue(await callTool(peer, 'bridge_status'));
+  assert.equal(status.application, 'claude');
+  toolValue(await callTool(peer, 'send_to_codex', {
+    thread_id: 'codex-target-a', message: 'Claude remains the sender.', message_id: 'inherited-env-test',
+  }));
+  assert.equal(setup.notifications.length, 1);
+  assert.equal(setup.notifications[0].arguments.threadId, 'codex-target-a');
+  const peerWithoutSocket = startMcp(t, { ...claudeEnv(setup),
+    CODEX_APP_TOOLS_PIPE_PATH: '\\\\.\\pipe\\stale-inherited-codex', CODEX_THREAD_ID: 'inherited-codex-task' });
+  await initialize(peerWithoutSocket);
+  assert.equal(getCodexHost({ stateDir: setup.stateDir }).pipePath, setup.codex.pipePath);
+  assert.equal(toolValue(await callTool(peerWithoutSocket, 'bridge_status')).application, 'claude');
+});
+
 test('Codex and Claude can initiate independent addressed messages without a connection or reply', windowsOnly, async t => {
   const setup = await setupMcp(t, { envThreadId: 'environment-fallback' });
   const meta = metadata('origin-mcp-chat');
@@ -304,44 +330,102 @@ test('Claude can discover and address a Codex chat before receiving any bridge m
   assert.ok(setup.catalogCalls.every(call => call.arguments.limit >= 1 && call.arguments.limit <= 50));
 });
 
+test('Claude chooses an older live Codex host when the latest registered pipe disappears', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const { publishCodexHost } = await import('../lib/codex-host.mjs');
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\stopped-codex-app',
+    threadId: 'stopped-context', pid: 2_147_483_647 });
+  const peer = startMcp(t, claudeEnv(setup));
+  await initialize(peer);
+  const chats = toolValue(await callTool(peer, 'list_codex_chats', { limit: 2 }));
+  assert.equal(chats.length, 2);
+  toolValue(await callTool(peer, 'send_to_codex', {
+    thread_id: 'codex-target-a', message: 'Fallback host receives this.', message_id: 'fallback-host',
+  }));
+  assert.equal(setup.notifications.length, 1);
+});
+
+test('Claude chooses a retained Codex context when the latest task was removed', windowsOnly, async t => {
+  const setup = await setupMcp(t, { rejectedContextIds: ['removed-context'] });
+  const { publishCodexHost } = await import('../lib/codex-host.mjs');
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: setup.codex.pipePath,
+    threadId: 'removed-context', pid: 2_147_483_647 });
+  const peer = startMcp(t, claudeEnv(setup));
+  await initialize(peer);
+  const chats = toolValue(await callTool(peer, 'list_codex_chats', { limit: 2 }));
+  assert.equal(chats.length, 2);
+  assert.ok(setup.catalogCalls.some(call => call.threadId === 'removed-context'));
+  assert.ok(setup.catalogCalls.some(call => call.threadId === 'known-host-context'));
+});
+
 test('message IDs deduplicate concurrent submissions from separate MCP processes in either direction', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const meta = metadata('codex-target-a');
   const twin = startMcp(t, setup.env);
   await initialize(twin);
   const outbound = { session_id: setup.sessionId, message: 'Send this only once.', message_id: 'same-outbound-id' };
-  for (const response of await Promise.all([
+  const outboundResults = await Promise.all([
     callTool(setup.client, 'send_to_claude', outbound, meta),
     callTool(twin, 'send_to_claude', outbound, meta),
-  ])) toolValue(response);
+  ]);
+  assert.ok(outboundResults.some(response => !isToolFailure(response)));
+  for (const response of outboundResults) {
+    if (isToolFailure(response)) assert.match(JSON.stringify(response), /sending|uncertain/);
+    else toolValue(response);
+  }
   assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
   assert.ok(isToolFailure(await callTool(setup.client, 'send_to_claude', { ...outbound, message: 'Changed payload.' }, meta)));
   const peer = startMcp(t, claudeEnv(setup));
   const peerTwin = startMcp(t, claudeEnv(setup));
   await Promise.all([initialize(peer), initialize(peerTwin)]);
   const inbound = { thread_id: 'codex-target-a', message: 'One independent observation.', message_id: 'same-inbound-id' };
-  for (const response of await Promise.all([
+  const inboundResults = await Promise.all([
     callTool(peer, 'send_to_codex', inbound), callTool(peerTwin, 'send_to_codex', inbound),
-  ])) toolValue(response);
+  ]);
+  assert.ok(inboundResults.some(response => !isToolFailure(response)));
+  for (const response of inboundResults) {
+    if (isToolFailure(response)) assert.match(JSON.stringify(response), /sending|uncertain/);
+    else toolValue(response);
+  }
   assert.equal(setup.notifications.length, 1);
   assert.ok(isToolFailure(await callTool(peer, 'send_to_codex', { ...inbound, message: 'Changed observation.' })));
 });
 
-test('a failed delivery cannot look successful when retried with the same message ID', windowsOnly, async t => {
+test('a recorded failure cannot look successful when retried with the same message ID', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  await setup.codex.close();
   const args = { thread_id: 'codex-target-a', message: 'An undelivered update.', message_id: 'failed-delivery' };
-  const first = await callTool(peer, 'send_to_codex', args);
-  assert.ok(isToolFailure(first));
-  assert.match(JSON.stringify(first), /ENOENT/);
+  const ledger = createSession({ stateDir: setup.stateDir, threadId: `claude:${setup.sessionId}`, cwd: setup.stateDir });
+  const route = { from: { kind: 'claude', id: setup.sessionId }, to: { kind: 'codex', id: args.thread_id } };
+  recordMessage(ledger, { id: args.message_id, direction: 'to_codex', message: args.message, route });
+  finishMessage(ledger, args.message_id, { status: 'failed', error: 'The native tool rejected the request.', route });
   const repeated = await callTool(peer, 'send_to_codex', args);
   assert.ok(isToolFailure(repeated));
   assert.match(JSON.stringify(repeated), /new message_id/);
+  assert.equal(setup.notifications.length, 0);
   const status = toolValue(await callTool(peer, 'bridge_status'));
   assert.equal(status.messages.length, 1);
   assert.equal(status.messages[0].status, 'failed');
+});
+
+test('a crashed send reports uncertain delivery instead of a successful duplicate', windowsOnly, async t => {
+  const setup = await setupMcp(t);
+  const peer = startMcp(t, claudeEnv(setup));
+  await initialize(peer);
+  const ledger = createSession({ stateDir: setup.stateDir, threadId: `claude:${setup.sessionId}`, cwd: setup.stateDir });
+  const args = { thread_id: 'codex-target-a', message: 'Possible message.', message_id: 'crashed-send' };
+  recordMessage(ledger, { id: args.message_id, direction: 'to_codex', message: args.message,
+    route: { from: { kind: 'claude', id: setup.sessionId }, to: { kind: 'codex', id: args.thread_id } } });
+  updateSession(ledger, state => {
+    Object.values(state.messages)[0].senderPid = 2_147_483_647;
+  });
+  const response = await callTool(peer, 'send_to_codex', args);
+  assert.ok(isToolFailure(response));
+  assert.match(JSON.stringify(response), /uncertain delivery/);
+  assert.equal(setup.notifications.length, 0);
+  const status = toolValue(await callTool(peer, 'bridge_status'));
+  assert.equal(status.messages[0].status, 'uncertain');
 });
 
 test('shared-server Codex metadata isolates sibling tasks and rejects malformed identities', windowsOnly, async t => {
