@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { RUNTIME_FILES, PLUGIN_NAME } from './install.mjs';
+import { PLUGIN_NAME, PORTABLE_RUNTIME_FILES, checkManifests, nativeBundleEntries } from './manifests.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const catalogName = 'keeveeg-desktop-bridge';
@@ -46,9 +46,15 @@ function entriesFrom(directory, prefix = '') {
 // Deterministic ZIP32 with stored entries. No external archiver or package is required.
 export function zipEntries(entries) {
   const localParts = [], directoryParts = [];
+  const seen = new Set();
   let offset = 0;
   if (entries.length > 65535) throw new Error('Too many ZIP entries');
   for (const entry of entries) {
+    if (typeof entry.name !== 'string' || !entry.name || /[\\\r\n\0:]/.test(entry.name) ||
+        entry.name.startsWith('/') || entry.name.split('/').some(part => !part || part === '.' || part === '..') || seen.has(entry.name)) {
+      throw new Error('ZIP entries require unique, safe relative paths.');
+    }
+    seen.add(entry.name);
     const name = Buffer.from(entry.name, 'utf8');
     const data = Buffer.from(entry.data);
     if (name.length > 65535 || data.length >= 0xffffffff) throw new Error('ZIP entry is too large');
@@ -76,6 +82,7 @@ export function zipEntries(entries) {
     central.writeUInt32LE(offset, 42);
     directoryParts.push(central, name);
     offset += header.length + name.length + data.length;
+    if (offset >= 0xffffffff) throw new Error('ZIP archive exceeds the ZIP32 size limit');
   }
   const centralDirectory = Buffer.concat(directoryParts);
   const end = Buffer.alloc(22);
@@ -90,20 +97,24 @@ export function zipEntries(entries) {
 export function buildPackages({ sourceRoot = root, outputDir = path.join(root, 'dist') } = {}) {
   const source = fs.realpathSync(sourceRoot);
   const destination = path.resolve(outputDir);
-  fs.mkdirSync(destination, { recursive: true });
-  const version = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')).version;
+  const bundle = checkManifests(source);
+  const version = bundle.manifest.version;
   if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version)) throw new Error('Release version must not contain a local build suffix');
+  fs.mkdirSync(destination, { recursive: true });
   const temp = safeChild(destination, `.package-${randomUUID()}`);
-  const plugin = path.join(temp, 'plugins', PLUGIN_NAME);
+  const marketplaceSource = path.join(temp, 'native-marketplace');
+  const plugin = path.join(marketplaceSource, 'plugins', PLUGIN_NAME);
+  const portable = path.join(temp, 'portable');
   fs.mkdirSync(plugin, { recursive: true });
   try {
-    for (const relative of [...RUNTIME_FILES, 'scripts/install.mjs']) {
+    for (const entry of nativeBundleEntries(bundle)) put(safeChild(plugin, entry.name), entry.data);
+    for (const relative of PORTABLE_RUNTIME_FILES) {
       const filename = safeChild(source, relative);
       const real = fs.realpathSync(filename);
       const realRelative = path.relative(source, real);
       if (!fs.lstatSync(filename).isFile() || !realRelative || realRelative === '..' ||
           realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) throw new Error(`Invalid runtime entry: ${relative}`);
-      put(safeChild(plugin, relative), fs.readFileSync(filename));
+      put(safeChild(portable, relative), fs.readFileSync(filename));
     }
     const codexCatalog = { name: catalogName, interface: { displayName: 'KeeVeeG Desktop Bridge' }, plugins: [{
       name: PLUGIN_NAME, source: { source: 'local', path: `./plugins/${PLUGIN_NAME}` },
@@ -113,14 +124,16 @@ export function buildPackages({ sourceRoot = root, outputDir = path.join(root, '
       description: 'Asynchronous messages between Codex Desktop and Claude Desktop Code.',
       plugins: [{ name: PLUGIN_NAME, source: `./plugins/${PLUGIN_NAME}` }],
     };
-    put(path.join(temp, '.agents', 'plugins', 'marketplace.json'), json(codexCatalog));
-    put(path.join(temp, '.claude-plugin', 'marketplace.json'), json(claudeCatalog));
+    put(path.join(marketplaceSource, '.agents', 'plugins', 'marketplace.json'), json(codexCatalog));
+    put(path.join(marketplaceSource, '.claude-plugin', 'marketplace.json'), json(claudeCatalog));
     const pluginName = `${PLUGIN_NAME}-${version}.zip`;
     const marketplaceName = `${PLUGIN_NAME}-marketplace-${version}.zip`;
+    const portableName = `${PLUGIN_NAME}-portable-${version}.zip`;
     const pluginEntries = entriesFrom(plugin);
     const archives = [
       { name: pluginName, data: zipEntries(pluginEntries) },
-      { name: marketplaceName, data: zipEntries(entriesFrom(temp)) },
+      { name: marketplaceName, data: zipEntries(entriesFrom(marketplaceSource)) },
+      { name: portableName, data: zipEntries(entriesFrom(portable)) },
     ];
     for (const archive of archives) put(path.join(destination, archive.name), archive.data);
     put(path.join(destination, 'SHA256SUMS'), archives.map(a => `${createHash('sha256').update(a.data).digest('hex')}  ${a.name}`).join('\n') + '\n');
@@ -130,7 +143,7 @@ export function buildPackages({ sourceRoot = root, outputDir = path.join(root, '
       if (fs.lstatSync(marketplace).isSymbolicLink()) throw new Error('Refusing to replace a linked output directory');
       fs.renameSync(marketplace, safeChild(destination, `.previous-marketplace-${randomUUID()}`));
     }
-    fs.renameSync(temp, marketplace);
+    fs.renameSync(marketplaceSource, marketplace);
     return { version, archives: archives.map(a => path.join(destination, a.name)), marketplace,
       sha256: path.join(destination, 'SHA256SUMS'), entries: pluginEntries.length };
   } finally {

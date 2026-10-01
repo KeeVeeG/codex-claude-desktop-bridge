@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude — conversations</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --fallback-background-primary: #181818;
+      --fallback-background-secondary: #303030;
+      --fallback-background-tertiary: #1b1b1b;
+      --fallback-composer: #333333;
+      --fallback-text-primary: #ffffff;
+      --fallback-text-secondary: #a0a0a0;
+      --fallback-text-tertiary: #9a9a9a;
+      --fallback-border: #292929;
+      --bg: var(--color-background-primary, var(--fallback-background-primary));
+      --sidebar: var(--color-background-tertiary, var(--fallback-background-tertiary));
+      --surface: var(--color-background-secondary, var(--fallback-background-secondary));
+      --composer: var(--color-background-secondary, var(--fallback-composer));
+      --text: var(--color-text-primary, var(--fallback-text-primary));
+      --muted: var(--color-text-secondary, var(--fallback-text-secondary));
+      --quiet: var(--color-text-tertiary, var(--fallback-text-tertiary));
+      --line: var(--color-border-secondary, var(--fallback-border));
+      --ring: var(--color-ring-primary, var(--text));
+      --danger: var(--color-text-danger, var(--text));
+      --warning: var(--color-text-warning, var(--muted));
+      font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+      font-size: var(--font-text-sm-size, 14px); line-height: var(--font-text-sm-line-height, 1.5); font-weight: var(--font-weight-normal, 400);
+    }
+    :root[data-theme=light] {
+      color-scheme: light;
+      --fallback-background-primary: #ffffff;
+      --fallback-background-secondary: #eeeeee;
+      --fallback-background-tertiary: #f7f7f7;
+      --fallback-composer: #f0f0f0;
+      --fallback-text-primary: #202020;
+      --fallback-text-secondary: #656565;
+      --fallback-text-tertiary: #6b6b6b;
+      --fallback-border: #e7e7e7;
+    }
+    * { box-sizing: border-box }
+    body { margin: 0; background: var(--bg); color: var(--text) }
+    button, input, textarea { font: inherit; color: inherit }
+    button { cursor: pointer; -webkit-tap-highlight-color: transparent }
+    button:disabled { cursor: default; opacity: .45 }
+    button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px }
+    svg { display: block; width: 17px; height: 17px; flex: none }
+    button svg { pointer-events: none }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap }
+    [hidden] { display: none !important }
+    .shell { height: 100dvh; min-height: 360px; display: flex; flex-direction: column; overflow: hidden }
+    .topbar { height: 48px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--bg) }
+    .brand-name { font-size: 14px; font-weight: var(--font-weight-semibold, 600) }
+    .toolbar { display: flex; align-items: center; gap: 3px }
+    .icon-button { width: 34px; height: 34px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 7px; color: var(--muted) }
+    .icon-button:hover { background: var(--surface); color: var(--text) }
+    .demo-banner { padding: 6px 16px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted) }
+    .demo-banner strong { font-weight: var(--font-weight-medium, 550); margin-right: 6px; color: var(--text) }
+    .main { display: grid; grid-template-columns: minmax(220px, 31%) minmax(0, 1fr); flex: 1; min-height: 0 }
+    .sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--sidebar) }
+    .sidebar-head { padding: 16px 14px 12px }
+    .heading-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px }
+    .heading-row h1 { font-size: 12px; font-weight: var(--font-weight-medium, 500); color: var(--muted); margin: 0 }
+    .count { font-size: 11px; color: var(--quiet) }
+    .search-wrap { position: relative }
+    .search-wrap svg { position: absolute; left: 9px; top: 9px; width: 15px; height: 15px; color: var(--quiet) }
+    .search { height: 36px; width: 100%; border: 1px solid var(--line); border-radius: 7px; background: transparent; padding: 5px 8px 5px 30px; color: var(--text); font-size: 12px }
+    .search::placeholder { color: var(--quiet) }
+    .tabs { display: flex; gap: 15px; padding: 0 15px 7px; border-bottom: 1px solid var(--line) }
+    .tab { min-height: 32px; padding: 5px 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: var(--font-weight-normal, 400) }
+    .tab[aria-selected=true] { color: var(--text) }
+    .chat-list { padding: 7px; flex: 1; overflow: auto; min-height: 0 }
+    .chat { width: 100%; display: block; padding: 10px 9px; margin-bottom: 2px; text-align: left; border: 0; border-radius: 7px; background: transparent }
+    .chat:hover, .chat[aria-current=true] { background: var(--surface) }
+    .chat-info { display: block; min-width: 0 }
+    .chat-top { display: flex; align-items: baseline; gap: 7px }
+    .chat-title { font-size: 13px; font-weight: var(--font-weight-normal, 400); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .chat-time { font-size: 10px; color: var(--quiet); white-space: nowrap; font-variant-numeric: tabular-nums }
+    .chat-cwd { display: block; margin-top: 4px; font-size: 11px; color: var(--quiet); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .sidebar-foot { display: none }
+    .list-empty { padding: 27px 9px; color: var(--muted); font-size: 12px; line-height: 1.6 }
+    .list-empty strong { display: block; color: var(--text); font-weight: var(--font-weight-normal, 400); margin-bottom: 4px }
+    .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg) }
+    .conversation-head { min-height: 57px; padding: 11px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 9px; flex: none }
+    .conversation-heading { flex: 1; min-width: 0 }
+    .conversation-title { font-size: 13px; line-height: 1.4; font-weight: var(--font-weight-medium, 500); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .conversation-subtitle { font-size: 11px; color: var(--quiet); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .mobile-back { display: none }
+    .welcome { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 30px; color: var(--muted) }
+    .welcome h2 { font-size: 15px; color: var(--text); font-weight: var(--font-weight-normal, 400); margin: 0 0 9px }
+    .welcome p { font-size: 13px; line-height: 1.7; max-width: 290px; margin: 0 }
+    .timeline { flex: 1; min-height: 0; overflow: auto; padding: 18px 23px 24px; scroll-behavior: auto }
+    .history-control { display: flex; justify-content: center; margin-bottom: 16px }
+    .small-button { min-height: 30px; font-size: 11px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted) }
+    .small-button:hover { background: var(--surface); color: var(--text) }
+    .day { margin: 14px 0 24px; color: var(--quiet); font-size: 11px; text-align: center }
+    .message-row { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 27px }
+    .message-row.outgoing { align-items: flex-end }
+    .message-label { color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 6px; margin: 0 0 7px }
+    .manual-tag { font-size: 10px; color: var(--quiet) }
+    .bubble { width: 100%; min-width: 0; padding: 0; background: transparent; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-text-md-size, 14px); line-height: var(--font-text-md-line-height, 1.7) }
+    .outgoing .bubble { width: auto; max-width: min(88%, 580px); padding: 12px 15px; border-radius: 16px; background: var(--surface) }
+    .message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 7px; color: var(--quiet); font-size: 10px; font-variant-numeric: tabular-nums }
+    .message-meta.warning { color: var(--warning) }
+    .message-meta.failed { color: var(--danger) }
+    .notice-detail { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; text-align: right; max-width: 88% }
+    .timeline-empty { margin: 44px 0; color: var(--muted); font-size: 13px; line-height: 1.7; max-width: 340px }
+    .timeline-empty strong { display: block; margin-bottom: 5px; color: var(--text); font-weight: var(--font-weight-normal, 400) }
+    .alert { display: flex; align-items: flex-start; gap: 10px; margin: 0 18px 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; flex: none }
+    .alert.error { color: var(--danger) }
+    .alert-text { flex: 1; min-width: 0 }
+    .alert button { border: 0; background: transparent; color: inherit; text-decoration: underline; padding: 0; font-size: 11px; white-space: nowrap }
+    .composer-wrap { padding: 0 16px 12px; flex: none }
+    .composer { padding: 13px 14px 10px; background: var(--composer); border: 1px solid var(--color-border-tertiary, var(--line)); border-radius: 21px; box-shadow: 0 1px 2px rgb(0 0 0 / 8%) }
+    .composer:focus-within { outline: 2px solid var(--ring); outline-offset: 2px }
+    .composer textarea { display: block; width: 100%; min-height: 44px; max-height: 140px; padding: 2px 1px 7px; border: 0; outline: 0; background: transparent; resize: none; overflow-y: hidden; color: var(--text); font-size: var(--font-text-md-size, 14px); line-height: var(--font-text-md-line-height, 1.55) }
+    .composer textarea::placeholder { color: var(--quiet) }
+    .composer textarea:focus-visible { outline: 0 }
+    .composer-bottom { display: flex; justify-content: flex-end; align-items: center; min-height: 32px; margin-top: 2px }
+    .send-button { display: grid; place-items: center; flex: 0 0 32px; aspect-ratio: 1 / 1; width: 32px; min-width: 32px; max-width: 32px; height: 32px; min-height: 32px; max-height: 32px; align-self: flex-end; padding: 0; appearance: none; background: var(--text); color: var(--bg); border: 0; border-radius: 50% }
+    .send-button:hover:not(:disabled) { background: var(--color-background-info, var(--text)); color: var(--color-text-inverse, var(--bg)) }
+    .send-button svg { width: 16px; height: 16px }
+    .composer-note { display: none; font-size: 10px; color: var(--quiet); margin: 7px 2px 0 }
+    .composer-inactive { padding: 12px 0; font-size: 12px; line-height: 1.7; color: var(--muted) }
+    .composer-inactive strong { display: block; color: var(--text); font-weight: var(--font-weight-normal, 400); margin-bottom: 3px }
+    .connection-error { padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--danger); font-size: 12px }
+    .spin svg { animation: spin 1s linear infinite }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    @media(prefers-reduced-motion:reduce) { .spin svg { animation: none } }
+    @media(min-width:1150px) { .main { grid-template-columns: 280px minmax(0,1fr) } .timeline { padding-left: 6%; padding-right: 6% } .composer-wrap { padding-left: 6%; padding-right: 6% } .alert { margin-left: 6%; margin-right: 6% } }
+    @media(max-width:620px) { .topbar { padding: 0 13px; height: 45px } .main { grid-template-columns: 1fr } .sidebar { border-right: 0 } .conversation { display: none } .shell.has-selection .sidebar { display: none } .shell.has-selection .conversation { display: flex } .mobile-back { display: grid } .conversation-head { padding: 10px 13px } .timeline { padding: 16px 16px 21px } .outgoing .bubble { max-width: 91% } .composer-wrap { padding: 0 12px 12px } .alert { margin: 0 12px 10px } .welcome { display: none } .demo-banner { padding: 6px 13px; font-size: 10px } }
+    @media(max-width:420px) { .send-button { flex-basis: 32px; width: 32px; min-width: 32px; max-width: 32px; height: 32px; min-height: 32px; max-height: 32px } }
+  </style>
+</head>
+<body>
+  <div class="shell" id="shell">
+    <header class="topbar">
+      <div class="brand-name">Claude</div>
+      <div class="toolbar"><span class="sr-only" id="connection-label" role="status">Connecting…</span><button class="icon-button" id="focus-search" type="button" aria-label="Search chats" title="Search chats"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button><button class="icon-button" id="refresh" type="button" aria-label="Refresh chats and history" title="Refresh"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 .4 7M20 3v5h-5"/></svg></button></div>
+    </header>
+    <div class="demo-banner" id="demo-banner" hidden><strong>Demo</strong>Demo interface. No real messages are sent.</div>
+    <div class="connection-error" id="connection-error" role="alert" hidden></div>
+    <div class="main">
+      <aside class="sidebar" aria-label="Conversation list">
+        <div class="sidebar-head"><div class="heading-row"><h1>Conversations</h1><span class="count" id="chat-count">—</span></div><div class="search-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><label class="sr-only" for="search">Search by chat or project name</label><input class="search" id="search" type="search" placeholder="Search chats or projects" autocomplete="off"></div></div>
+        <div class="tabs" role="tablist" aria-label="Show chats"><button class="tab" id="tab-contacted" role="tab" aria-selected="true" aria-controls="chat-list" type="button">Conversations</button><button class="tab" id="tab-all" role="tab" aria-selected="false" aria-controls="chat-list" type="button" tabindex="-1">All chats</button></div>
+        <div class="chat-list" id="chat-list" role="tabpanel" aria-label="Claude chats"></div>
+        <div class="sidebar-foot"><span class="foot-dot" aria-hidden="true"></span><span id="sidebar-note">Local Desktop chats</span></div>
+      </aside>
+      <main class="conversation" aria-label="Conversation">
+        <div class="conversation-head" id="conversation-head" hidden><button class="icon-button mobile-back" id="back" type="button" aria-label="Back to chat list"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m14 6-6 6 6 6"/></svg></button><div class="conversation-heading"><h2 class="conversation-title" id="conversation-title"></h2><div class="conversation-subtitle" id="conversation-subtitle"></div></div></div>
+        <div class="welcome" id="welcome"><h2>Select a Claude chat</h2><p>Messages and the reply box will appear here.</p></div>
+        <div class="timeline" id="timeline" aria-label="Message history" hidden></div>
+        <div class="alert" id="conversation-alert" role="status" hidden><span class="alert-text" id="alert-text"></span><button type="button" id="alert-refresh">Refresh</button></div>
+        <div class="composer-wrap" id="composer-wrap" hidden><div class="composer-inactive" id="composer-inactive" hidden><strong id="inactive-title"></strong><span id="inactive-detail"></span></div><form class="composer" id="composer"><label class="sr-only" for="message">Message for the selected Claude chat</label><textarea id="message" aria-describedby="composer-hint" rows="1" placeholder="Write to Claude…" maxlength="65536"></textarea><span class="sr-only" id="composer-hint">Enter — send · Shift+Enter — new line</span><div class="composer-bottom"><button class="send-button" id="send" type="submit"><span class="sr-only" id="send-label">Send</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-5 5 5-5 5 5"/></svg></button></div></form><p class="composer-note" id="composer-note">“Delivered” means sent to the app, not read.</p></div>
+      </main>
+    </div>
+    <div class="sr-only" id="announcement" aria-live="polite"></div>
+  </div>
+  <script type="module">
+  const $ = id => document.getElementById(id);
+  const demo = location.hash === '#demo';
+  const state = { chats: [], selected: null, tab: 'contacted', query: '', owner: null, ready: false,
+    drafts: new Map(), histories: new Map(), sends: new Map(), panelError: '', refreshing: false };
+  const noticeRetries = new Set();
+  const rpcPending = new Map();
+  let rpcId = 0;
+  let hostOrigin = null;
+  let initializeId = null;
+  let initialLoad = false;
+  let initialPanelResult = null;
+  // Codex's native composer sends on Enter and inserts a newline with
+  // Shift+Enter. Hosts may override this through hostContext when exposed.
+  let composerEnterBehavior = 'enter';
+  const initialPanelWaiters = [];
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const string = value => typeof value === 'string' ? value : '';
+  const timestamp = value => { const date = new Date(value); return Number.isFinite(date.getTime()) && date.getTime() > 0 ? date.getTime() : 0; };
+  const targetOrigin = () => hostOrigin && hostOrigin !== 'null' ? hostOrigin : '*';
+  const shortTime = value => timestamp(value) ? new Date(timestamp(value)).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+  const shortDate = value => timestamp(value) ? new Date(timestamp(value)).toLocaleDateString('en-US', { day: '2-digit', month: '2-digit' }) : '';
+  const workspace = cwd => string(cwd).split(/[\\/]/).filter(Boolean).slice(-2).join(' / ');
+  function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+  function announce(text) { $('announcement').textContent = text; }
+  function theme(context) {
+    if (!object(context)) return;
+    if (context.theme === 'dark' || context.theme === 'light') document.documentElement.dataset.theme = context.theme;
+    const variables = context.styles?.variables;
+    if (object(variables)) for (const [name, value] of Object.entries(variables)) {
+      if (/^--[a-zA-Z0-9_-]+$/.test(name) && typeof value === 'string') document.documentElement.style.setProperty(name, value);
+    }
+  }
+  function composerContext(context) {
+    if (!object(context)) return;
+    const value = context.composer_enter_behavior ?? context.composer?.enterBehavior ?? context['codex/composer']?.enterBehavior ?? context['openai/composer']?.enterBehavior;
+    if (['enter', 'cmdIfMultiline', 'cmdAlways'].includes(value)) composerEnterBehavior = value;
+    else if (value === 'send') composerEnterBehavior = 'enter';
+    else if (value === 'newline') composerEnterBehavior = 'cmdAlways';
+  }
+  function resizeComposer() {
+    const input = $('message'); if (!input) return;
+    input.style.height = 'auto';
+    const height = Math.min(input.scrollHeight || 46, 140);
+    input.style.height = `${height}px`;
+    input.style.overflowY = (input.scrollHeight || 0) > 140 ? 'auto' : 'hidden';
+  }
+  function rpc(method, params) {
+    if (!hostOrigin && method !== 'ui/initialize') return Promise.reject(new Error('Desktop connection is not established yet.'));
+    const id = ++rpcId;
+    if (method === 'ui/initialize') initializeId = id;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { rpcPending.delete(id); reject(new Error('Desktop did not respond in time. Refresh the panel.')); }, 25000);
+      rpcPending.set(id, { resolve, reject, timer, method });
+      window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, targetOrigin());
+    });
+  }
+  function notify(method, params) { window.parent.postMessage({ jsonrpc: '2.0', method, params }, targetOrigin()); }
+  function waitForInitialPanel() {
+    if (initialPanelResult) return Promise.resolve(initialPanelResult);
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        const index = initialPanelWaiters.findIndex(waiter => waiter.resolve === resolve);
+        if (index >= 0) initialPanelWaiters.splice(index, 1);
+        resolve(null);
+      }, 250);
+      initialPanelWaiters.push({ resolve, timer });
+    });
+  }
+  function receiveInitialPanel(data) {
+    if (!initialPanelResult) initialPanelResult = data;
+    while (initialPanelWaiters.length) {
+      const waiter = initialPanelWaiters.shift(); clearTimeout(waiter.timer); waiter.resolve(initialPanelResult);
+    }
+  }
+  function mcpData(result) {
+    if (!object(result)) throw new Error('Desktop returned an invalid response format.');
+    if (result.isError) {
+      const detail = Array.isArray(result.content) ? result.content.filter(item => item?.type === 'text').map(item => string(item.text)).join('\n') : '';
+      throw new Error(detail.slice(0, 1200) || 'Action could not be completed.');
+    }
+    if (object(result.structuredContent)) return result.structuredContent;
+    if (Array.isArray(result.content)) for (const item of result.content) if (item?.type === 'text') {
+      try { const value = JSON.parse(item.text); if (object(value)) return value; } catch {}
+    }
+    throw new Error('Desktop returned an invalid response format.');
+  }
+  async function call(name, args = {}) {
+    if (demo) return demoCall(name, args);
+    return mcpData(await rpc('tools/call', { name, arguments: args }));
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || !object(event.data) || event.data.jsonrpc !== '2.0') return;
+    const message = event.data;
+    if (hostOrigin !== null && event.origin !== hostOrigin) return;
+    if (Object.hasOwn(message, 'id') && rpcPending.has(message.id)) {
+      const pending = rpcPending.get(message.id);
+      if (hostOrigin === null) {
+        if (message.id !== initializeId || typeof event.origin !== 'string') return;
+        if (!object(message.error) && (!object(message.result) || message.result.protocolVersion !== '2026-01-26')) {
+          clearTimeout(pending.timer); rpcPending.delete(message.id);
+          pending.reject(new Error('Desktop did not negotiate a supported UI version. Update the app and reopen the panel.'));
+          return;
+        }
+        hostOrigin = event.origin;
+      }
+      clearTimeout(pending.timer); rpcPending.delete(message.id);
+      if (message.error) pending.reject(new Error(string(message.error.message).slice(0, 1200) || 'Desktop could not complete the request.'));
+      else pending.resolve(message.result);
+      return;
+    }
+    if (hostOrigin === null) return;
+    if (message.method === 'ui/notifications/host-context-changed') { theme(message.params); composerContext(message.params); renderComposer(); }
+    if (message.method === 'ui/notifications/tool-result') {
+      try {
+        const data = mcpData(message.params);
+        if (Array.isArray(data.chats) && data.application === 'codex') {
+          if (!initialLoad && !state.ready) receiveInitialPanel(data);
+          applyPanel(data);
+        }
+        else if (typeof data.session_id === 'string' && Array.isArray(data.messages)) applyHistory(data.session_id, data, false);
+      } catch (error) { showConnectionError(error.message); }
+    }
+  });
+  function showConnectionError(text) { state.panelError = text; $('connection-error').textContent = text; $('connection-error').hidden = !text; }
+  function history(sessionId) {
+    if (!state.histories.has(sessionId)) state.histories.set(sessionId, { messages: [], loaded: false, loading: false, nextCursor: null, hasMore: false, paged: false, error: '', warning: '' });
+    return state.histories.get(sessionId);
+  }
+  function applyPanel(data) {
+    if (data.application !== 'codex' || typeof data.owner_thread_id !== 'string') throw new Error('This panel is available in a local Codex chat with a verified sender.');
+    composerContext(data);
+    if (state.owner && state.owner !== data.owner_thread_id) {
+      state.ready = false; renderComposer();
+      throw new Error('The Codex context changed. Reopen the panel in the intended chat.');
+    }
+    state.owner = data.owner_thread_id;
+    state.chats = data.chats.filter(chat => object(chat) && typeof chat.session_id === 'string' && chat.session_id)
+      .map(chat => ({ ...chat, title: string(chat.title) || 'Claude chat', cwd: string(chat.cwd), live: chat.live === true }));
+    state.ready = true; showConnectionError('');
+    $('connection-label').textContent = demo ? 'Demo' : 'Desktop connected';
+    if (!state.selected && typeof data.selected_session_id === 'string' && state.chats.some(chat => chat.session_id === data.selected_session_id)) select(data.selected_session_id);
+    renderChats(); renderConversation({ preserveTimeline: true });
+  }
+  function renderChats() {
+    const active = document.activeElement;
+    const activeId = active?.id || '';
+    const activeSession = active?.dataset?.sessionId || '';
+    const query = state.query.toLocaleLowerCase('en-US');
+    const chats = state.chats.filter(chat => (state.tab === 'all' || timestamp(chat.last_contact_at) || history(chat.session_id).messages.length)
+      && (!query || `${chat.title}\n${chat.cwd}`.toLocaleLowerCase('en-US').includes(query)));
+    $('chat-count').textContent = chats.length === state.chats.length ? String(chats.length) : `${chats.length} / ${state.chats.length}`;
+    chats.sort((a, b) => timestamp(b.last_activity_at || b.last_contact_at) - timestamp(a.last_activity_at || a.last_contact_at));
+    $('tab-contacted').setAttribute('aria-selected', String(state.tab === 'contacted'));
+    $('tab-all').setAttribute('aria-selected', String(state.tab === 'all'));
+    $('tab-contacted').tabIndex = state.tab === 'contacted' ? 0 : -1; $('tab-all').tabIndex = state.tab === 'all' ? 0 : -1;
+    const nodes = chats.map(chat => {
+      const button = element('button', 'chat'); button.type = 'button'; button.dataset.sessionId = chat.session_id;
+      button.setAttribute('aria-current', String(state.selected === chat.session_id)); button.setAttribute('aria-label', `${chat.title}${chat.live ? '' : ', inactive chat'}`);
+      const info = element('span', 'chat-info'); const top = element('span', 'chat-top');
+      top.append(element('span', 'chat-title', chat.title));
+      const activity = timestamp(chat.last_activity_at || chat.last_contact_at);
+      if (activity) top.append(element('span', 'chat-time', new Date(activity).toDateString() === new Date().toDateString() ? shortTime(activity) : shortDate(activity)));
+      info.append(top, element('span', 'chat-cwd', `${workspace(chat.cwd) || 'Claude Desktop Code'} · ${chat.live ? 'Open' : 'Archived'}`));
+      button.append(info); button.addEventListener('click', () => select(chat.session_id)); return button;
+    });
+    if (!nodes.length) {
+      const empty = element('div', 'list-empty');
+      empty.append(element('strong', '', state.ready ? (query ? 'No results' : state.tab === 'contacted' ? 'No conversations yet' : 'No chats available') : 'Loading chats…'),
+        element('span', '', query ? 'Try another name or project.' : state.tab === 'contacted' ? 'Open All chats to start a conversation.' : 'Open a Code session in Claude Desktop and refresh the list.'));
+      nodes.push(empty);
+    }
+    $('chat-list').replaceChildren(...nodes);
+    // Rendering a refresh replaces chat buttons. Keep keyboard focus on the
+    // same row (or control) instead of sending it back to the document root.
+    if (activeSession) {
+      const restored = Array.from($('chat-list').children).find(node => node.dataset?.sessionId === activeSession);
+      restored?.focus();
+    } else if (activeId && $(activeId)) $(activeId).focus();
+  }
+  function select(sessionId) {
+    if (!state.chats.some(chat => chat.session_id === sessionId)) return;
+    if (state.selected) state.drafts.set(state.selected, $('message').value);
+    state.selected = sessionId; $('message').value = state.drafts.get(sessionId) || '';
+    renderChats();
+    const selected = Array.from($('chat-list').children).find(node => node.dataset?.sessionId === sessionId);
+    selected?.focus();
+    renderConversation();
+    if (!history(sessionId).loaded && !history(sessionId).loading) loadHistory(sessionId);
+  }
+  function renderConversation({ preserveTimeline = false } = {}) {
+    const chat = state.chats.find(item => item.session_id === state.selected);
+    $('shell').classList.toggle('has-selection', Boolean(chat));
+    $('welcome').hidden = Boolean(chat); $('conversation-head').hidden = !chat; $('timeline').hidden = !chat; $('composer-wrap').hidden = !chat;
+    if (!chat) { $('conversation-alert').hidden = true; return; }
+    $('conversation-title').textContent = chat.title;
+    $('conversation-subtitle').textContent = `${chat.live ? 'Session active' : 'Session inactive'}${workspace(chat.cwd) ? ` · ${workspace(chat.cwd)}` : ''}`;
+    renderTimeline({ preserve: preserveTimeline }); renderComposer(); renderAlert();
+  }
+  function statusText(message) {
+    if (message.status === 'uncertain') return 'Delivery not confirmed';
+    if (message.status === 'failed') return 'Not sent';
+    if (message.status === 'sending') return 'Sending…';
+    return demo ? 'Added to demo' : message.direction === 'to_claude' ? 'Sent to Claude' : 'From Claude';
+  }
+  function renderTimeline({ preserve = false, prependHeight = null } = {}) {
+    if (!state.selected) return;
+    const cache = history(state.selected); const pane = $('timeline');
+    const previousTop = pane.scrollTop; const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 70;
+    const nodes = [];
+    if (cache.hasMore && cache.nextCursor) {
+      const control = element('div', 'history-control'); const button = element('button', 'small-button', cache.olderLoading ? 'Loading…' : 'Load earlier messages');
+      button.type = 'button'; button.disabled = Boolean(cache.olderLoading); button.addEventListener('click', () => loadOlder()); control.append(button); nodes.push(control);
+    }
+    const messages = [...cache.messages]; const pending = state.sends.get(state.selected);
+    if (pending && !messages.some(message => message.id === pending.id)) messages.push({ id: pending.id, direction: 'to_claude', message: pending.message, created_at: pending.createdAt,
+      status: pending.outcome === 'sending' ? 'sending' : 'uncertain', manual: true });
+    let lastDay = '';
+    for (const message of messages) {
+      const date = timestamp(message.created_at); const day = date ? new Date(date).toDateString() : '';
+      if (day && day !== lastDay) {
+        lastDay = day; const today = new Date().toDateString(); const yesterday = new Date(Date.now() - 86400000).toDateString();
+        nodes.push(element('div', 'day', day === today ? 'Today' : day === yesterday ? 'Yesterday' : new Date(date).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' })));
+      }
+      const outgoing = message.direction === 'to_claude'; const row = element('article', `message-row${outgoing ? ' outgoing' : ''}`);
+      const label = element('div', 'message-label', outgoing ? message.manual === true ? 'You' : 'Codex' : 'Claude');
+      if (message.manual === true) label.append(element('span', 'manual-tag', 'Manual'));
+      const bubble = element('div', 'bubble', string(message.message));
+      const meta = element('div', `message-meta${message.status === 'uncertain' ? ' warning' : message.status === 'failed' ? ' failed' : ''}`);
+      meta.append(element('time', '', shortTime(date)), element('span', '', statusText(message)));
+      if (message.status === 'submitted' && !demo) meta.title = 'Sent to the app. This does not confirm that it was read.';
+      row.append(label, bubble, meta);
+      if (message.notice_status && message.notice_status !== 'submitted') row.append(element('span', 'notice-detail', message.notice_status === 'failed'
+        ? 'Notification was not sent to the current Codex chat' : message.notice_status === 'uncertain' ? 'Codex notification delivery is unconfirmed' : 'Codex notification is pending'));
+      if (message.manual === true && message.status === 'submitted' && message.notice_status === 'failed' && message.notice_retryable === true) {
+        const button = element('button', 'small-button', noticeRetries.has(`${state.selected}:${message.id}`) ? 'Retrying notification…' : 'Retry Codex notification');
+        button.type = 'button'; button.disabled = noticeRetries.has(`${state.selected}:${message.id}`);
+        button.style.marginTop = '7px'; button.addEventListener('click', () => retryNotice(message.id)); row.append(button);
+      }
+      nodes.push(row);
+    }
+    if (!messages.length) { const empty = element('div', 'timeline-empty'); empty.append(element('strong', '', cache.loading ? 'Loading history…' : cache.error ? 'History unavailable' : 'Start a conversation'),
+      element('span', '', cache.error ? 'Refresh history to try again.' : cache.loading ? 'Messages will appear here.' : 'Your message will appear in this Claude chat. The reply will arrive as a separate message.')); nodes.push(empty); }
+    pane.replaceChildren(...nodes);
+    if (prependHeight !== null) pane.scrollTop = previousTop + pane.scrollHeight - prependHeight;
+    else if (preserve && !nearBottom) pane.scrollTop = previousTop;
+    else pane.scrollTop = pane.scrollHeight;
+  }
+  function renderComposer() {
+    const chat = state.chats.find(item => item.session_id === state.selected); if (!chat) return;
+    const pending = state.sends.get(chat.session_id); const uncertain = pending?.outcome === 'uncertain';
+    $('composer').hidden = !chat.live || uncertain; $('composer-inactive').hidden = chat.live && !uncertain;
+    $('inactive-title').textContent = uncertain ? 'Delivery not confirmed' : 'This Claude session is inactive';
+    $('inactive-detail').textContent = uncertain ? 'The text and message ID were saved. Check the selected Claude chat and refresh history. Resending is blocked.'
+      : 'History is available. To send a new message, open the relevant Code session in Claude Desktop and refresh the list.';
+    const value = state.drafts.get(chat.session_id) || ''; const bytes = new TextEncoder().encode(value).length;
+    const sending = pending?.outcome === 'sending';
+    $('message').disabled = !state.ready || sending;
+    resizeComposer();
+    $('send').disabled = !state.ready || !chat.live || !value.trim() || bytes > 65536 || Boolean(pending);
+    $('send-label').textContent = sending ? 'Sending…' : demo ? 'Add to demo' : 'Send';
+    $('composer-hint').textContent = bytes > 65536 ? 'Message exceeds the 64 KiB limit'
+      : composerEnterBehavior === 'cmdAlways' ? 'Enter — new line · Ctrl / ⌘ + Shift + Enter — send'
+      : composerEnterBehavior === 'cmdIfMultiline' ? 'Enter — send · new line in multiline text'
+      : 'Enter — send · Shift+Enter — new line';
+  }
+  function renderAlert() {
+    if (!state.selected) return;
+    const cache = history(state.selected); const pending = state.sends.get(state.selected);
+    const text = pending?.outcome === 'uncertain' ? 'Send result is unknown. Do not resend this text until you check the Claude chat.'
+      : cache.error || cache.warning;
+    $('conversation-alert').hidden = !text; $('alert-text').textContent = text || '';
+    $('conversation-alert').classList.toggle('error', Boolean(cache.error) && !pending);
+  }
+  function applyHistory(sessionId, data, older) {
+    if (data.session_id !== sessionId || !Array.isArray(data.messages)) throw new Error('History belongs to another conversation. Refresh the panel.');
+    const cache = history(sessionId); const merged = new Map(cache.messages.map(message => [message.id, message]));
+    for (const message of data.messages) if (object(message) && typeof message.id === 'string' && typeof message.message === 'string'
+      && ['to_claude', 'to_codex'].includes(message.direction)) merged.set(message.id, message);
+    const previous = JSON.stringify(cache.messages); cache.messages = [...merged.values()].sort((a, b) => timestamp(a.created_at) - timestamp(b.created_at));
+    if (!cache.paged || older) { cache.nextCursor = typeof data.next_cursor === 'string' ? data.next_cursor : null; cache.hasMore = data.has_more === true && Boolean(cache.nextCursor); }
+    if (older) cache.paged = true;
+    cache.loaded = true; cache.loading = false; cache.error = ''; cache.warning = string(data.warning);
+    const pending = state.sends.get(sessionId); const recorded = pending && cache.messages.find(message => message.id === pending.id);
+    if (recorded?.status === 'submitted') {
+      state.sends.delete(sessionId); if (state.drafts.get(sessionId) === pending.message) { state.drafts.set(sessionId, ''); if (state.selected === sessionId) $('message').value = ''; }
+    } else if (recorded?.status === 'failed') { state.sends.delete(sessionId); cache.warning = 'Message was not sent. The text was saved; you can send it again manually.'; }
+    else if (pending && recorded?.status === 'uncertain') pending.outcome = 'uncertain';
+    if (!older && state.selected === sessionId && (previous !== JSON.stringify(cache.messages) || !cache.messages.length)) renderTimeline({ preserve: true });
+    if (state.selected === sessionId) { renderComposer(); renderAlert(); }
+    renderChats();
+  }
+  async function loadHistory(sessionId, quiet = false) {
+    const cache = history(sessionId); if (cache.loading) return;
+    cache.loading = true; if (!cache.loaded && state.selected === sessionId) renderTimeline();
+    try { applyHistory(sessionId, await call('bridge_ui_history', { session_id: sessionId, limit: 100 }), false); }
+    catch (error) { cache.error = error.message; cache.loading = false; if (state.selected === sessionId) { renderTimeline({ preserve: true }); renderAlert(); } if (!quiet) announce('Could not load history.'); }
+    finally { cache.loading = false; }
+  }
+  async function loadOlder() {
+    const sessionId = state.selected; if (!sessionId) return;
+    const cache = history(sessionId); if (!cache.nextCursor || cache.olderLoading) return;
+    const height = $('timeline').scrollHeight; cache.olderLoading = true; renderTimeline({ preserve: true });
+    try { applyHistory(sessionId, await call('bridge_ui_history', { session_id: sessionId, limit: 100, cursor: cache.nextCursor }), true);
+      if (state.selected === sessionId) renderTimeline({ prependHeight: height }); }
+    catch (error) { cache.error = error.message; if (state.selected === sessionId) renderAlert(); }
+    finally { cache.olderLoading = false; if (state.selected === sessionId) renderTimeline({ preserve: true }); }
+  }
+  async function refresh(quiet = false) {
+    if (state.refreshing || (!demo && !hostOrigin)) return;
+    state.refreshing = true; if (!quiet) $('refresh').classList.add('spin');
+    try { applyPanel(await call('bridge_panel')); if (state.selected) await loadHistory(state.selected, quiet); }
+    catch (error) { if (!quiet || !state.ready) showConnectionError(error.message); }
+    finally { state.refreshing = false; $('refresh').classList.remove('spin'); }
+  }
+  async function sendMessage() {
+    const sessionId = state.selected; const chat = state.chats.find(item => item.session_id === sessionId);
+    const message = state.drafts.get(sessionId) || '';
+    if (!chat?.live || !state.ready || !message.trim() || new TextEncoder().encode(message).length > 65536 || state.sends.has(sessionId)) return;
+    const pending = { id: crypto.randomUUID(), message, createdAt: Date.now(), outcome: 'sending' };
+    state.sends.set(sessionId, pending); renderTimeline(); renderComposer(); renderAlert();
+    try {
+      const data = await call('bridge_ui_send', { session_id: sessionId, message, message_id: pending.id });
+      if (!object(data.message) || data.message.id !== pending.id) throw new Error('Could not match the response to the sent message.');
+      const record = { ...data.message, created_at: data.message.created_at ?? data.message.createdAt ?? pending.createdAt,
+        direction: 'to_claude', manual: data.manual === true, notice_status: data.notice_status, notice_retryable: data.notice_retryable === true };
+      const cache = history(sessionId); cache.messages = cache.messages.filter(item => item.id !== pending.id); cache.messages.push(record);
+      if (record.status === 'submitted') {
+        state.sends.delete(sessionId); state.drafts.set(sessionId, ''); if (state.selected === sessionId) $('message').value = '';
+        cache.warning = data.notice_status && data.notice_status !== 'submitted' ? 'Message sent to Claude. Notification in the current Codex chat is unconfirmed.' : '';
+        announce(demo ? 'Message added to demo.' : 'Message sent to the selected Claude chat.');
+      } else if (record.status === 'failed') { state.sends.delete(sessionId); cache.warning = 'Message was not sent. The text was saved.'; }
+      else pending.outcome = 'uncertain';
+      chat.last_contact_at = pending.createdAt; chat.last_activity_at = pending.createdAt; renderChats();
+      if (state.selected === sessionId) { renderTimeline(); renderComposer(); renderAlert(); }
+      await loadHistory(sessionId, true);
+    } catch (error) {
+      pending.outcome = 'uncertain'; history(sessionId).error = '';
+      if (state.selected === sessionId) { renderTimeline(); renderComposer(); renderAlert(); }
+      announce('Delivery is unconfirmed. Check Claude and refresh history.');
+    }
+  }
+  async function retryNotice(messageId) {
+    const sessionId = state.selected; if (!sessionId || demo) return;
+    const cache = history(sessionId); const message = cache.messages.find(item => item.id === messageId);
+    const key = `${sessionId}:${messageId}`;
+    if (!message || message.manual !== true || message.status !== 'submitted' || message.notice_status !== 'failed' || message.notice_retryable !== true || noticeRetries.has(key)) return;
+    noticeRetries.add(key); renderTimeline({ preserve: true });
+    try {
+      const data = await call('bridge_ui_retry_notice', { session_id: sessionId, message_id: messageId });
+      if (!object(data.message) || data.message.id !== messageId) throw new Error('Could not match the notification response.');
+      message.notice_status = data.notice_status;
+      message.notice_retryable = data.notice_retryable === true;
+      cache.warning = data.notice_status === 'submitted' ? '' : 'The message was already sent to Claude. The retry Codex notification is unconfirmed.';
+      await loadHistory(sessionId, true);
+    } catch { message.notice_status = 'uncertain'; message.notice_retryable = false; cache.warning = 'Retry notification result is unknown. Refresh history; the message was not resent to Claude.'; }
+    finally { noticeRetries.delete(key); if (state.selected === sessionId) { renderTimeline({ preserve: true }); renderAlert(); } }
+  }
+  $('search').addEventListener('input', () => { state.query = $('search').value; renderChats(); });
+  for (const [id, tab] of [['tab-contacted', 'contacted'], ['tab-all', 'all']]) {
+    $(id).addEventListener('click', () => { state.tab = tab; renderChats(); });
+    $(id).addEventListener('keydown', event => { if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); state.tab = state.tab === 'all' ? 'contacted' : 'all'; renderChats(); $(state.tab === 'all' ? 'tab-all' : 'tab-contacted').focus(); } });
+  }
+  $('message').addEventListener('input', () => { if (state.selected) state.drafts.set(state.selected, $('message').value); renderComposer(); });
+  $('message').addEventListener('keydown', event => {
+    const shortcut = event.ctrlKey || event.metaKey;
+    if (event.key !== 'Enter' || event.isComposing || (event.shiftKey && !(composerEnterBehavior === 'cmdAlways' && shortcut))) return;
+    const multiline = $('message').value.includes('\n');
+    const shouldSend = composerEnterBehavior === 'enter'
+      || (composerEnterBehavior === 'cmdIfMultiline' && !multiline)
+      || (composerEnterBehavior === 'cmdAlways' && shortcut)
+      || (composerEnterBehavior === 'cmdIfMultiline' && shortcut);
+    if (shouldSend) { event.preventDefault(); sendMessage(); }
+  });
+  $('composer').addEventListener('submit', event => { event.preventDefault(); sendMessage(); });
+  $('refresh').addEventListener('click', () => refresh()); $('alert-refresh').addEventListener('click', () => refresh());
+  $('focus-search').addEventListener('click', () => { if (state.selected) state.drafts.set(state.selected, $('message').value); state.selected = null; renderChats(); renderConversation(); $('search').focus(); });
+  $('back').addEventListener('click', () => { if (state.selected) state.drafts.set(state.selected, $('message').value); state.selected = null; renderChats(); renderConversation(); });
+  const demoNow = Date.now();
+  const demoChats = [
+    { session_id: 'demo-interface', title: 'Desktop Bridge UI', cwd: 'C:/Projects/desktop-bridge', live: true, last_contact_at: demoNow - 300000, last_activity_at: demoNow - 180000 },
+    { session_id: 'demo-review', title: 'Change review', cwd: 'C:/Projects/desktop-bridge', live: true, last_contact_at: demoNow - 3600000, last_activity_at: demoNow - 3200000 },
+    { session_id: 'demo-archive', title: 'Plugin research', cwd: 'C:/Projects/research', live: false, last_contact_at: demoNow - 86400000, last_activity_at: demoNow - 86400000 },
+    { session_id: 'demo-new', title: 'New Code session', cwd: 'C:/Projects/prototype', live: true, last_contact_at: null, last_activity_at: demoNow - 60000 },
+  ];
+  const demoMessages = new Map([
+    ['demo-interface', [
+      { id: 'demo-a', direction: 'to_claude', message: 'Please review the latest plugin documentation updates. Which changes are useful for our bridge?', created_at: demoNow - 1200000, status: 'submitted' },
+      { id: 'demo-b', direction: 'to_codex', message: 'I reviewed the documentation. Result schemas, diagnostics, and correct send cancellation are useful for the current bridge.\n\nThe UI can now be a native panel with conversation selection, history, and manual messages.', created_at: demoNow - 900000, status: 'submitted' },
+      { id: 'demo-c', direction: 'to_claude', message: 'Good. We will preserve the exact recipient and show delivery status clearly.', created_at: demoNow - 300000, status: 'submitted', manual: true, notice_status: 'submitted' },
+      { id: 'demo-d', direction: 'to_codex', message: 'Yes. “Sent to Claude” means sent to the app. Reading and replying are separate events.', created_at: demoNow - 180000, status: 'submitted' },
+    ]],
+    ['demo-review', [{ id: 'demo-review-a', direction: 'to_codex', message: 'Review complete. You can leave a draft reply in this conversation and return later.', created_at: demoNow - 3200000, status: 'submitted' }]],
+    ['demo-archive', [{ id: 'demo-archive-a', direction: 'to_codex', message: 'Research complete. This session is closed, but the conversation history is saved.', created_at: demoNow - 86400000, status: 'submitted' }]],
+    ['demo-new', []],
+  ]);
+  async function demoCall(name, args) {
+    if (name === 'bridge_panel') return { owner_thread_id: 'demo-owner', application: 'codex', chats: demoChats, ...(initialLoad ? {} : { selected_session_id: 'demo-interface' }) };
+    if (name === 'bridge_ui_history') return { session_id: args.session_id, messages: args.cursor ? [{ id: 'demo-older', direction: 'to_claude', message: 'Starting the Desktop Bridge discussion.', created_at: demoNow - 86400000, status: 'submitted' }] : demoMessages.get(args.session_id) || [], has_more: args.session_id === 'demo-interface' && !args.cursor, next_cursor: args.session_id === 'demo-interface' && !args.cursor ? 'demo-older' : null };
+    if (name === 'bridge_ui_send') {
+      const message = { id: args.message_id, direction: 'to_claude', message: args.message, created_at: Date.now(), status: 'submitted', manual: true, notice_status: 'submitted' };
+      demoMessages.get(args.session_id).push(message); return { message, manual: true, notice_status: 'submitted' };
+    }
+    throw new Error('This action is unavailable in the demo.');
+  }
+  renderChats(); renderConversation();
+  if (demo) {
+    $('demo-banner').hidden = false; $('sidebar-note').textContent = 'Demo chats'; $('composer-note').textContent = 'Demo: text stays in this preview and is not sent to Desktop apps.';
+    await refresh(); initialLoad = true;
+  } else {
+    try {
+      const result = await rpc('ui/initialize', { appInfo: { name: 'desktop-bridge-panel', version: '0.3.0' }, appCapabilities: {}, protocolVersion: '2026-01-26' });
+      theme(result.hostContext); composerContext(result.hostContext); notify('ui/notifications/initialized', {});
+      await waitForInitialPanel();
+      if (!initialPanelResult) await refresh();
+      initialLoad = true;
+    } catch (error) { $('connection-label').textContent = 'Not connected'; showConnectionError(error.message); }
+    setInterval(() => { if (document.visibilityState === 'visible' && state.ready) refresh(true); }, 12000);
+  }
+  </script>
+</body>
+</html>

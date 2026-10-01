@@ -9,6 +9,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = fs.readdirSync(path.join(root, 'test'))
   .filter(name => name.endsWith('.test.mjs')).sort().map(name => path.join(root, 'test', name));
 if (!tests.length) throw new Error('No tests found in test/.');
-const result = spawnSync(process.execPath, ['--test', ...tests], { cwd: root, stdio: 'inherit', windowsHide: true });
+// The lock-recovery stress tests already run several child processes. Running
+// every file concurrently can exhaust their bounded lock-acquisition deadline.
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], { cwd: root, stdio: 'inherit', windowsHide: true });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;

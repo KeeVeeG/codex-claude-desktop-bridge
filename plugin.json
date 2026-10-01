@@ -1,0 +1,39 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-claude-desktop-bridge",
+  "version": "0.3.0",
+  "description": "Send native messages between Codex Desktop tasks and Claude Desktop Code sessions on Windows.",
+  "author": {
+    "name": "KeeVeeG",
+    "url": "https://github.com/KeeVeeG"
+  },
+  "homepage": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+  "repository": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+  "license": "MIT",
+  "keywords": ["desktop", "messaging", "windows", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Codex–Claude Desktop Bridge",
+        "shortDescription": "Message Codex and Claude Desktop conversations.",
+        "longDescription": "Find local conversations and send text between Codex Desktop tasks and Claude Desktop Code sessions on Windows. Either application can start a conversation or reply.",
+        "developerName": "KeeVeeG",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge",
+        "supportURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge/issues",
+        "privacyPolicyURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge/blob/main/docs/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/KeeVeeG/codex-claude-desktop-bridge/blob/main/docs/TERMS.md",
+        "composerIcon": "./assets/bridge.svg",
+        "composerIconDark": "./assets/bridge-dark.svg",
+        "logo": "./assets/bridge.svg",
+        "logoDark": "./assets/bridge-dark.svg",
+        "defaultPrompt": [
+          "Open the Claude conversation panel beside this Codex chat so I can search chats, read history, and send a message manually.",
+          "Find the Claude Desktop Code conversation I name and send it my message.",
+          "Check the bridge status and recent outgoing deliveries."
+        ]
+      }
+    }
+  }
+}

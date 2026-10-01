@@ -5,9 +5,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareInstallation, installApplications, writeJsonAtomic, PLUGIN_NAME, RUNTIME_FILES, CLAUDE_SEND_PERMISSION, grantClaudeSendPermission } from '../scripts/install.mjs';
+import { checkManifests } from '../scripts/manifests.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const work = path.join(root, 'work');
+const windowsOnly = { skip: process.platform !== 'win32' && 'Windows sharing retries are platform-specific.' };
 
 function fixture(t) {
   fs.mkdirSync(work, { recursive: true });
@@ -165,6 +167,12 @@ test('both staged plugins share a profile state path despite different MSIX LOCA
     for (const manifestDirectory of ['.codex-plugin', '.claude-plugin']) {
       statePaths.push(stagedServer(prepared.destination, manifestDirectory).env.CODEX_CLAUDE_BRIDGE_STATE_DIR);
     }
+    const canonicalMcp = JSON.parse(fs.readFileSync(path.join(prepared.destination, 'config/mcp-source.json'), 'utf8'));
+    assert.equal(canonicalMcp.mcpServers[PLUGIN_NAME].env.CODEX_CLAUDE_BRIDGE_STATE_DIR, expected);
+    assert.equal(fs.existsSync(path.join(prepared.destination, 'plugin.json')), false, 'native install must retain Codex env_vars forwarding');
+    assert.equal(fs.existsSync(path.join(prepared.destination, 'mcp.json')), false);
+    const aligned = checkManifests(prepared.destination);
+    assert.equal(aligned.packageJson.version, `${JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8')).version}+codex.${prepared.build}`);
   }
   assert.deepEqual(statePaths, [expected, expected, expected, expected]);
   assert.equal(fs.readFileSync(sourceFile, 'utf8'), sourceBefore);
@@ -184,7 +192,7 @@ test('installer pins an explicit shared state override without changing portable
   assert.equal(fs.readFileSync(sourceFile, 'utf8'), sourceBefore);
 });
 
-test('staged Codex and Claude configurations start five MCP tools from Unicode paths and an unrelated working directory', async t => {
+test('staged Codex and Claude configurations start the complete MCP catalog from Unicode paths and an unrelated working directory', async t => {
   const { homeDir } = fixture(t);
   const sourceCodexPath = path.join(root, '.codex-plugin', 'plugin.json');
   const sourceClaudeConfigPath = path.join(root, '.mcp.json');
@@ -208,7 +216,7 @@ test('staged Codex and Claude configurations start five MCP tools from Unicode p
   assert.equal(codex.cwd, './');
   assert.ok(codex.args.every(value => !value.includes('${CLAUDE_PLUGIN_ROOT}')));
   assert.ok(claude.args.some(value => value.includes('${CLAUDE_PLUGIN_ROOT}')));
-  const expectedTools = ['bridge_status', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex'];
+  const expectedTools = ['bridge_doctor', 'bridge_panel', 'bridge_status', 'bridge_ui_history', 'bridge_ui_retry_notice', 'bridge_ui_send', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex'];
   for (const [application, config] of [['Codex', codex], ['Claude', claude]]) {
     assert.equal(config.env.CODEX_CLAUDE_BRIDGE_STATE_DIR, prepared.stateDir);
     const env = { ...process.env, ...config.env, HOME: homeDir, USERPROFILE: homeDir, LOCALAPPDATA: path.join(homeDir, `${application} app cache`) };
@@ -223,12 +231,77 @@ test('staged Codex and Claude configurations start five MCP tools from Unicode p
     const launchCwd = application === 'Codex' ? path.resolve(copiedRoot, config.cwd) : unrelatedCwd;
     assert.notEqual(copiedRoot, unrelatedCwd);
     const result = await probeMcpStartup(launch, launchCwd, env);
+    assert.equal(result.initialize.serverInfo.version, codexManifest.version);
     assert.deepEqual(result.initialize.capabilities.tools, {});
     assert.deepEqual(result.tools.map(tool => tool.name).sort(), expectedTools, `${application} startup must expose the complete catalog without a tool call`);
   }
   assert.equal(fs.readFileSync(sourceCodexPath, 'utf8'), originalCodex);
   assert.equal(fs.readFileSync(sourceClaudeConfigPath, 'utf8'), originalClaude);
   assert.equal(fs.existsSync(path.join(prepared.stateDir, 'codex-host.json')), false, 'startup tests must not publish a live app endpoint');
+});
+
+test('staging retries transient Windows sharing errors without losing the prepared plugin', windowsOnly, t => {
+  const { homeDir } = fixture(t);
+  const rename = fs.renameSync;
+  let transientFailures = 0;
+  fs.renameSync = (source, destination) => {
+    if (String(source).includes('.codex-claude-desktop-bridge.stage-') && transientFailures < 2) {
+      transientFailures++;
+      const error = new Error('simulated scanner sharing violation');
+      error.code = 'EPERM';
+      throw error;
+    }
+    return rename(source, destination);
+  };
+  let prepared;
+  try {
+    prepared = prepareInstallation({ sourceRoot: root, homeDir, codex: false, claude: true });
+  } finally {
+    fs.renameSync = rename;
+  }
+  assert.equal(transientFailures, 2);
+  assert.equal(fs.existsSync(path.join(prepared.destination, '.codex-plugin', 'plugin.json')), true);
+  assert.equal(fs.readdirSync(path.join(homeDir, 'plugins')).filter(name => name.includes('.stage-')).length, 0);
+});
+
+test('staging rollback survives a transient replacement move failure', windowsOnly, t => {
+  const { homeDir } = fixture(t);
+  const first = prepareInstallation({ sourceRoot: root, homeDir, codex: false, claude: true });
+  const rename = fs.renameSync;
+  let transientFailures = 0;
+  fs.renameSync = (source, destination) => {
+    if (String(source).includes('.codex-claude-desktop-bridge.stage-') && transientFailures < 1) {
+      transientFailures++;
+      const error = new Error('simulated scanner sharing violation');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    return rename(source, destination);
+  };
+  let second;
+  try {
+    second = prepareInstallation({ sourceRoot: root, homeDir, codex: false, claude: true });
+  } finally {
+    fs.renameSync = rename;
+  }
+  assert.equal(transientFailures, 1);
+  assert.equal(second.backupDirectory.startsWith(path.join(homeDir, 'plugins')), true);
+  assert.equal(fs.existsSync(path.join(second.destination, '.codex-plugin', 'plugin.json')), true);
+  assert.equal(fs.existsSync(first.destination), true);
+});
+
+test('a native deployment can prepare a new installation without depending on the source repository', t => {
+  const { homeDir } = fixture(t);
+  const first = prepareInstallation({ sourceRoot: root, homeDir: path.join(homeDir, 'first-profile'), env: {} });
+  const second = prepareInstallation({ sourceRoot: first.destination, homeDir: path.join(homeDir, 'second-profile'), env: {} });
+  const bundle = checkManifests(second.destination);
+  assert.equal(bundle.native, true);
+  assert.equal(bundle.manifest.version, `${JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8')).version}+codex.${second.build}`);
+  assert.equal(bundle.packageJson.version, bundle.manifest.version);
+  assert.equal(bundle.mcp.mcpServers[PLUGIN_NAME].env.CODEX_CLAUDE_BRIDGE_STATE_DIR, second.stateDir);
+  assert.equal(stagedServer(second.destination, '.codex-plugin').env.CODEX_CLAUDE_BRIDGE_STATE_DIR, second.stateDir);
+  assert.equal(stagedServer(second.destination, '.claude-plugin').env.CODEX_CLAUDE_BRIDGE_STATE_DIR, second.stateDir);
+  assert.ok(stagedServer(second.destination, '.codex-plugin').env_vars.includes('CODEX_APP_TOOLS_PIPE_PATH'));
 });
 
 test('explicit Claude permission grant creates only the exact send_to_codex allow rule', t => {

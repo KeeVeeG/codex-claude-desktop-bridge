@@ -5,7 +5,9 @@ import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { runMcpServer, TOOLS } from '../scripts/mcp.mjs';
 import { createSession, getSession, readSession, updateSession, recordMessage, finishMessage } from '../lib/store.mjs';
 import { nativeFixture, mockPipe, encodeFrame, messageTool } from './native-helpers.mjs';
 
@@ -104,7 +106,13 @@ async function initialize(client) {
 }
 
 function callTool(client, name, args = {}, meta) {
-  return client.rpc('tools/call', { name, arguments: args, ...(meta ? { _meta: meta } : {}) });
+  return client.rpc('tools/call', { name, arguments: args, ...(meta ? { _meta: meta } : {}) }).then(response => {
+    if (!response.error && !response.result?.isError) {
+      const tool = TOOLS.find(item => item.name === name);
+      assertSchema(response.result.structuredContent, tool.outputSchema, name);
+    }
+    return response;
+  });
 }
 
 function toolValue(response) {
@@ -116,6 +124,201 @@ function toolValue(response) {
 function isToolFailure(response) {
   return Boolean(response.error || response.result?.isError);
 }
+
+function memoryMcp(t, executor) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const messages = [];
+  const waiting = new Map();
+  let buffer = '';
+  output.setEncoding('utf8');
+  output.on('data', chunk => {
+    buffer += chunk;
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) break;
+      const response = JSON.parse(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      messages.push(response);
+      waiting.get(response.id)?.(response);
+    }
+  });
+  const done = runMcpServer({ input, output, executor, env: {} });
+  t.after(async () => {
+    input.end();
+    const timer = setTimeout(() => input.emit('error', new Error('Test teardown')), 2000);
+    await done;
+    clearTimeout(timer);
+  });
+  let nextId = 1;
+  function write(message) { input.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`); }
+  function response(id) {
+    const received = messages.find(message => message.id === id);
+    if (received) return Promise.resolve(received);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`No response for ${String(id)}`)); }, 2000);
+      waiting.set(id, value => { clearTimeout(timer); waiting.delete(id); resolve(value); });
+    });
+  }
+  return { messages, response, write,
+    notify(method, params = {}) { write({ method, params }); },
+    rpc(method, params = {}) { const id = nextId++; write({ id, method, params }); return response(id); },
+  };
+}
+
+function assertSchema(value, specification, label = 'result') {
+  if (specification.type) {
+    const types = Array.isArray(specification.type) ? specification.type : [specification.type];
+    assert.ok(types.some(type => type === 'null' ? value === null
+      : type === 'array' ? Array.isArray(value)
+      : type === 'object' ? value !== null && typeof value === 'object' && !Array.isArray(value)
+      : type === 'integer' ? Number.isInteger(value) : typeof value === type), `${label} must have declared type`);
+  }
+  if (Object.hasOwn(specification, 'const')) assert.equal(value, specification.const, label);
+  if (specification.enum) assert.ok(specification.enum.includes(value), `${label} must have a declared enum value`);
+  if (specification.pattern) assert.match(value, new RegExp(specification.pattern), label);
+  if (specification.type === 'object') {
+    for (const key of specification.required) assert.ok(Object.hasOwn(value, key), `${label}.${key} is required`);
+    for (const [key, item] of Object.entries(value)) {
+      if (Object.hasOwn(specification.properties, key)) assertSchema(item, specification.properties[key], `${label}.${key}`);
+      else assert.notEqual(specification.additionalProperties, false, `${label}.${key} is not declared`);
+    }
+  }
+  if (specification.type === 'array') value.forEach((item, index) => assertSchema(item, specification.items, `${label}[${index}]`));
+}
+
+test('MCP structured results match advertised schemas while text JSON remains compatible', async t => {
+  const route = { from: { kind: 'codex', id: 'source' }, to: { kind: 'claude', id: 'recipient' } };
+  const record = { id: 'message-one', route, direction: 'to_claude', message: 'Visible message.',
+    createdAt: 1, updatedAt: 2, senderPid: 123, status: 'submitted', fingerprint: 'a'.repeat(64),
+    receipt: { status: 'written', messageId: 'native-id', acknowledged: false } };
+  const values = {
+    list_claude_sessions: [{ sessionId: 'recipient', pid: 123, name: 'Claude', cwd: 'C:/project', status: 'idle',
+      version: '2.1.280', entrypoint: 'claude-desktop', hostSessionId: null, procStart: '123', pidDomain: 'win32:test' }],
+    list_codex_chats: [{ thread_id: 'source', title: 'Codex', status: 'idle', host_id: 'local' }],
+    send_to_claude: { message: record },
+    send_to_codex: { message: { ...record, route: { from: route.to, to: route.from }, direction: 'to_codex' }, retransmitted: false },
+    bridge_status: { application: 'codex', sender_id: 'source', state_directory: 'C:/state', messages: [record], note: 'Submitted.', plugin_version: 'test' },
+    bridge_doctor: { application: 'unknown', ready: false, checks: [{ name: 'caller', status: 'fail', detail: 'No verified sender.' }], plugin_version: 'test' },
+    bridge_panel: { owner_thread_id: 'source', application: 'codex', chats: [{ session_id: 'recipient',
+      title: 'Claude', cwd: 'C:/project', live: true, last_activity_at: 2, last_contact_at: 1 }], warnings: [] },
+    bridge_ui_history: { session_id: 'recipient', messages: [{ id: record.id, direction: 'to_claude',
+      message: record.message, created_at: 1, status: 'submitted', manual: true }], next_cursor: null, has_more: false, warnings: [] },
+    bridge_ui_send: { message: { ...record, manual: true }, manual: true, notice_status: 'submitted' },
+    bridge_ui_retry_notice: { message: { ...record, manual: true }, manual: true, notice_status: 'failed', notice_retryable: true,
+      notice_error: 'The owner notice was rejected before submission.' },
+  };
+  const client = memoryMcp(t, async name => values[name]);
+  await initialize(client);
+  for (const tool of TOOLS) {
+    const args = tool.name === 'send_to_claude' ? { session_id: 'recipient', message: 'Text.' }
+      : tool.name === 'send_to_codex' ? { thread_id: 'source', message: 'Text.' }
+      : tool.name === 'bridge_ui_send' ? { session_id: 'recipient', message: 'Text.', message_id: 'manual-one' }
+      : tool.name === 'bridge_ui_retry_notice' ? { session_id: 'recipient', message_id: 'manual-one' }
+      : tool.name === 'bridge_ui_history' ? { session_id: 'recipient' } : {};
+    const response = await callTool(client, tool.name, args);
+    assert.deepEqual(toolValue(response), values[tool.name]);
+    assertSchema(response.result.structuredContent, tool.outputSchema, tool.name);
+    assert.deepEqual(response.result.structuredContent, tool.name === 'list_claude_sessions' ? { sessions: values[tool.name] }
+      : tool.name === 'list_codex_chats' ? { chats: values[tool.name] } : values[tool.name]);
+  }
+});
+
+test('MCP rejects invalid and reserved message IDs before invoking the executor', async t => {
+  const calls = [];
+  const client = memoryMcp(t, async (name, args) => {
+    calls.push(args);
+    return { message: { id: args.message_id, route: { from: { kind: 'codex', id: 'source' }, to: { kind: 'claude', id: 'recipient' } },
+      direction: 'to_claude', message: args.message, createdAt: 1, status: 'submitted', fingerprint: 'a'.repeat(64) } };
+  });
+  await initialize(client);
+  const tool = TOOLS.find(item => item.name === 'send_to_claude');
+  const specification = tool.inputSchema.properties.message_id;
+  assert.equal(specification.pattern, '^[a-zA-Z0-9_-]{1,100}$');
+  for (const message_id of ['', 'space in id', '../path', 'кириллица', 'a'.repeat(101),
+    ...specification.not.enum]) {
+    const response = await callTool(client, tool.name, { session_id: 'recipient', message: 'Text.', message_id });
+    assert.equal(response.result.isError, true, message_id);
+    assert.equal(response.result.structuredContent, undefined);
+  }
+  for (const message_id of ['safe-id_123', 'a'.repeat(100)]) {
+    assert.notEqual((await callTool(client, tool.name, { session_id: 'recipient', message: 'Text.', message_id })).result.isError, true);
+  }
+  assert.deepEqual(calls.map(call => call.message_id), ['safe-id_123', 'a'.repeat(100)]);
+});
+
+test('queued MCP cancellation never calls executor and keeps numeric and string IDs distinct', async t => {
+  const calls = [];
+  let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const client = memoryMcp(t, async (name, args, context) => {
+    calls.push({ name, args, signal: context.signal });
+    if (name === 'list_claude_sessions') { started(); await held; return []; }
+    return {};
+  });
+  await initialize(client);
+  client.write({ id: 'held', method: 'tools/call', params: { name: 'list_claude_sessions' } });
+  await firstStarted;
+  for (const id of ['123', 123]) client.write({ id, method: 'tools/call', params: {
+    name: 'send_to_claude', arguments: { session_id: 'recipient', message: String(id) },
+  } });
+  client.notify('notifications/cancelled', { requestId: '123' });
+  assert.deepEqual((await client.rpc('ping')).result, {}, 'ping must bypass the held operation');
+  assert.equal(calls.length, 1);
+  release();
+  await client.response(123);
+  assert.equal(calls.length, 2, 'the cancelled queued send must never execute');
+  assert.equal(calls[1].name, 'send_to_claude');
+  assert.equal(calls[1].signal.aborted, false);
+  assert.equal(client.messages.some(response => response.id === '123'), false, 'accepted cancellation has no response');
+});
+
+test('running MCP cancellation aborts executor promptly and suppresses its response', async t => {
+  let signal;
+  let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  const client = memoryMcp(t, async (name, args, context) => {
+    if (name === 'send_to_codex') {
+      signal = context.signal;
+      started();
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }
+    return [];
+  });
+  await initialize(client);
+  client.write({ id: 'running', method: 'tools/call', params: {
+    name: 'send_to_codex', arguments: { thread_id: 'recipient', message: 'Text.' },
+  } });
+  await firstStarted;
+  assert.deepEqual((await client.rpc('ping')).result, {}, 'ping must respond while the executor is pending');
+  assert.equal(signal.aborted, false);
+  client.notify('notifications/cancelled', { requestId: 'running', reason: 'User cancelled.' });
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(toolValue(await callTool(client, 'list_claude_sessions')), []);
+  assert.equal(client.messages.some(response => response.id === 'running'), false);
+});
+
+test('unknown, malformed, completed, and initialization cancellations do not cancel later requests', async t => {
+  const signals = [];
+  const client = memoryMcp(t, async (name, args, context) => { signals.push(context.signal); return []; });
+  client.write({ id: 'init', method: 'initialize', params: { protocolVersion: '2025-11-25' } });
+  client.notify('notifications/cancelled', { requestId: 'init' });
+  assert.equal((await client.response('init')).result.protocolVersion, '2025-11-25');
+  client.notify('notifications/initialized');
+  client.notify('notifications/cancelled', { requestId: 'future' });
+  client.write({ id: 'future', method: 'tools/call', params: { name: 'list_claude_sessions' } });
+  assert.deepEqual(toolValue(await client.response('future')), []);
+  client.notify('notifications/cancelled', { requestId: 'future' });
+  client.notify('notifications/cancelled', { requestId: null });
+  client.notify('notifications/cancelled', { requestId: {}, reason: 'Invalid ID.' });
+  client.notify('notifications/cancelled', { requestId: 'reused', reason: 123 });
+  client.write({ id: 'reused', method: 'tools/call', params: { name: 'list_claude_sessions' } });
+  assert.deepEqual(toolValue(await client.response('reused')), []);
+  assert.ok(signals.every(signal => !signal.aborted));
+});
 
 async function setupMcp(t, { envThreadId, holdFirstNotification = false, rejectedContextIds = [] } = {}) {
   const fixture = await nativeFixture(t);
@@ -201,11 +404,32 @@ function registerClaudeParent(setup, parentPid, socketPath) {
 test('MCP advertises direct, addressed messages without pair-management tools or routing tokens', async t => {
   const fixture = await nativeFixture(t);
   const client = startMcp(t, { CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir });
-  await initialize(client);
+  const initialized = await initialize(client);
+  assert.equal(initialized.result.serverInfo.title, 'Claude');
+  assert.equal(initialized.result.serverInfo.icons[0].mimeType, 'image/svg+xml');
   const listed = await client.rpc('tools/list');
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), [
-    'bridge_status', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex',
+    'bridge_doctor', 'bridge_panel', 'bridge_status', 'bridge_ui_history', 'bridge_ui_retry_notice', 'bridge_ui_send', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex',
   ]);
+  for (const tool of listed.result.tools) {
+    assert.ok(tool.title.trim());
+    assert.equal(tool.outputSchema.type, 'object');
+    assert.equal(tool.outputSchema.additionalProperties, false);
+    const sending = ['send_to_claude', 'send_to_codex', 'bridge_ui_send', 'bridge_ui_retry_notice'].includes(tool.name);
+    assert.equal(tool.annotations.readOnlyHint, !sending);
+    assert.equal(tool.annotations.destructiveHint, sending);
+    assert.equal(tool.annotations.openWorldHint, false);
+    assert.equal(tool.annotations.idempotentHint, !sending);
+  }
+  const panelTool = listed.result.tools.find(tool => tool.name === 'bridge_panel');
+  assert.deepEqual(panelTool._meta['openai/ui'].entrypoints, [{ type: 'thread' }]);
+  assert.equal(panelTool._meta['openai/iconStyle'], undefined);
+  assert.equal(panelTool.icons[0].mimeType, 'image/svg+xml');
+  assert.match(panelTool.icons[0].src, /^data:image\/svg\+xml;base64,[A-Za-z0-9+/]+=*$/);
+  const panelIconSvg = Buffer.from(panelTool.icons[0].src.split(',')[1], 'base64').toString('utf8');
+  assert.doesNotMatch(panelIconSvg, /currentColor/);
+  assert.match(panelIconSvg, /#D97757/);
+  assert.match(panelIconSvg, /#FFF9F1/);
   const listSchema = listed.result.tools.find(tool => tool.name === 'list_codex_chats').inputSchema;
   assert.equal(listSchema.properties.limit.maximum, 50);
   assert.equal(listed.result.tools.find(tool => tool.name === 'bridge_status').inputSchema.properties.limit.maximum, 100);
@@ -229,6 +453,11 @@ test('MCP advertises direct, addressed messages without pair-management tools or
   assert.ok(isToolFailure(await callTool(client, 'connect_claude', { session_id: 'unused' })));
   assert.ok(isToolFailure(await callTool(client, 'disconnect_bridge')));
   assert.deepEqual((await client.rpc('ping')).result, {});
+  const diagnostics = toolValue(await callTool(client, 'bridge_doctor'));
+  assert.equal(typeof diagnostics.ready, 'boolean');
+  assert.equal(diagnostics.application, 'unknown');
+  assert.ok(diagnostics.checks.some(check => check.status === 'fail'));
+  assert.equal(diagnostics.plugin_version, JSON.parse(fs.readFileSync(new URL('../plugin.json', import.meta.url), 'utf8')).version);
 });
 
 test('Codex MCP startup refreshes a previous host after restart without a startup task ID', async t => {

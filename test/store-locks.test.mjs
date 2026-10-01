@@ -10,7 +10,7 @@ import { nativeFixture as fixture } from './native-helpers.mjs';
 const storeUrl = new URL('../lib/store.mjs', import.meta.url).href;
 const DEAD_PID = 2_147_483_647;
 
-function worker(t, script, args) {
+function worker(t, script, args, { watchdogMs = 15_000 } = {}) {
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
@@ -34,7 +34,7 @@ function worker(t, script, args) {
     if (!isReady && stdout.includes('ready\n')) { isReady = true; readyResolve(); }
   });
   child.stderr.on('data', text => { stderr += text; });
-  const watchdog = setTimeout(() => child.kill(), 15_000);
+  const watchdog = setTimeout(() => child.kill(), watchdogMs);
   exited.finally(() => clearTimeout(watchdog));
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill();
@@ -43,7 +43,7 @@ function worker(t, script, args) {
   return { child, ready, exited };
 }
 
-test('simultaneous crash recovery never unlinks a replacement lock or loses updates', { timeout: 20_000 }, async t => {
+test('simultaneous crash recovery never unlinks a replacement lock or loses updates', { timeout: 30_000 }, async t => {
   assert.equal(processAlive(DEAD_PID), false);
   const setup = await fixture(t);
   const session = createSession({ ...setup, threadId: 'contended-recovery' });
@@ -67,17 +67,31 @@ test('simultaneous crash recovery never unlinks a replacement lock or loses upda
     };
     process.stdout.write('ready\\n');
     while (!fs.existsSync(gate)) Atomics.wait(sleeper, 0, 0, 5);
+    const deadline = Date.now() + 20_000;
     for (let count = 0; count < 25; count++) {
-      updateSession(session, state => {
-        fs.writeFileSync(sentinel, String(process.pid), { flag: 'wx' });
+      for (;;) {
+        let callbackStarted = false;
         try {
-          Atomics.wait(sleeper, 0, 0, 2);
-          state.counter = (state.counter ?? 0) + 1;
-        } finally { fs.unlinkSync(sentinel); }
-      });
+          updateSession(session, state => {
+            callbackStarted = true;
+            fs.writeFileSync(sentinel, String(process.pid), { flag: 'wx' });
+            try {
+              Atomics.wait(sleeper, 0, 0, 2);
+              state.counter = (state.counter ?? 0) + 1;
+            } finally { fs.unlinkSync(sentinel); }
+          });
+          break;
+        } catch (error) {
+          // The documented busy-acquisition rejection occurs before callback.
+          // Retry that exact case under the overall stress budget; never replay
+          // a callback, a state-write failure, or a broken critical section.
+          if (callbackStarted || error.message !== 'Bridge state is busy; retry with the same message ID' || Date.now() >= deadline) throw error;
+          Atomics.wait(sleeper, 0, 0, 10);
+        }
+      }
     }
   `;
-  const workers = Array.from({ length: 8 }, () => worker(t, script, [setup.stateDir, session.key, gate, sentinel, lock]));
+  const workers = Array.from({ length: 8 }, () => worker(t, script, [setup.stateDir, session.key, gate, sentinel, lock], { watchdogMs: 25_000 }));
   await Promise.all(workers.map(item => item.ready));
   fs.writeFileSync(gate, 'go');
   const results = await Promise.all(workers.map(item => item.exited));

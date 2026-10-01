@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "codex-claude-desktop-bridge",
-      "source": "./",
+      "source": "./compatibility/native",
       "description": "Send direct native messages between Codex Desktop tasks and Claude Desktop Code sessions."
     }
   ]

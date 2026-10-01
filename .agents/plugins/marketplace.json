@@ -5,8 +5,9 @@
     {
       "name": "codex-claude-desktop-bridge",
       "source": {
-        "source": "url",
+        "source": "git-subdir",
         "url": "https://github.com/KeeVeeG/codex-claude-desktop-bridge.git",
+        "path": "./compatibility/native",
         "ref": "main"
       },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
