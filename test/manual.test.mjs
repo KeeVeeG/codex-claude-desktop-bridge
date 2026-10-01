@@ -68,7 +68,7 @@ test('human manual send preserves full text and provenance and posts one context
   assert.equal(setup.notices[0].arguments.threadId, setup.owner);
   assert.ok(setup.notices[0].arguments.prompt.includes(setup.args.session_id));
   assert.ok(setup.notices[0].arguments.prompt.endsWith(setup.args.message));
-  assert.match(setup.notices[0].arguments.prompt, /новой задачи или запроса на ответ нет/);
+  assert.match(setup.notices[0].arguments.prompt, /not a new task or a request for a reply/);
   assert.equal(readManualRecords({ stateDir: setup.stateDir, threadId: setup.owner })[0].notice_status, 'submitted');
   assert.equal(fs.readFileSync(setup.ledgerFile, 'utf8').includes(setup.args.message), false, 'supplementary ledger must not duplicate message bodies');
   const again = await manualSend(setup.args, setup.context);
