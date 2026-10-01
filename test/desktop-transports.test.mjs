@@ -12,7 +12,7 @@ function answer(socket, id, result) {
 test('Claude adapter writes auth first, preserves Unicode, and does not claim model delivery', async t => {
   const pipe = await mockPipe(t);
   const token = `test-secret-${randomUUID()}`;
-  const message = 'Привет, Claude.\nReview "src/file with spaces.js".';
+  const message = 'Hello, Claude. 🦊\nReview "src/file with spaces.js".';
   const environment = getClaudeEnvironment({ CLAUDE_CODE_MESSAGING_SOCKET: pipe.pipePath, CLAUDE_CODE_MESSAGING_TOKEN: token });
   const response = await sendToClaude({ ...environment, message });
   assert.deepEqual(response, { status: 'written', messageId: response.messageId, acknowledged: false });
@@ -59,7 +59,7 @@ test('Codex adapter discovers the app tool and addresses only the selected task'
       else assert.fail(`Unexpected method: ${message.method}`);
     },
   });
-  const message = 'Отчёт Claude.\nAll checks passed.';
+  const message = 'Claude report. ✅\nAll checks passed.';
   const result = await sendToCodex({ pipePath: pipe.pipePath, contextThreadId: 'bridge-context',
     threadId: 'paired-task', message, turnId: 'bridge-turn', callId: 'bridge-call' });
   assert.equal(result.success, true);

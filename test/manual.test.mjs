@@ -45,7 +45,7 @@ async function setup(t, { noticeFailure, onNotice } = {}) {
   const env = { CODEX_APP_TOOLS_PIPE_PATH: codex.pipePath, CODEX_THREAD_ID: 'untrusted-startup-thread',
     CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir, CODEX_CLAUDE_BRIDGE_REGISTRY_DIR: registryDir };
   const context = { env, metadata: { 'x-codex-turn-metadata': { thread_id: owner } } };
-  const args = { session_id: sessionId, message: 'Полный текст пользователя: Unicode 🦊\nВторая строка.', message_id: 'manual-fixture-one' };
+  const args = { session_id: sessionId, message: 'Full user text: Unicode 🦊\nSecond line.', message_id: 'manual-fixture-one' };
   const ledgerFile = path.join(fixture.stateDir, 'manual', hash(owner), 'state.json');
   return { ...fixture, claude, codex, notices, failureMode, registryDir, keyPath, owner, args, context, ledgerFile };
 }
@@ -61,14 +61,13 @@ test('human manual send preserves full text and provenance and posts one context
   assert.equal(result.notice_status, 'submitted');
   assert.equal(userFrames(setup.claude).length, 1);
   const received = userFrames(setup.claude)[0].message.message.content;
-  assert.match(received, /User manually sending from Codex Desktop task/);
+  assert.match(received, /User sent from Codex Desktop task/);
   assert.ok(received.endsWith(setup.args.message));
   assert.equal(setup.notices.length, 1);
   assert.equal(setup.notices[0].threadId, setup.owner);
   assert.equal(setup.notices[0].arguments.threadId, setup.owner);
-  assert.ok(setup.notices[0].arguments.prompt.includes(setup.args.session_id));
-  assert.ok(setup.notices[0].arguments.prompt.endsWith(setup.args.message));
-  assert.match(setup.notices[0].arguments.prompt, /not a new task or a request for a reply/);
+  assert.equal(setup.notices[0].arguments.prompt,
+    `[User sent to Claude session "${setup.args.session_id}"; bridge message "${setup.args.message_id}"; context only]\n\n${setup.args.message}`);
   assert.equal(readManualRecords({ stateDir: setup.stateDir, threadId: setup.owner })[0].notice_status, 'submitted');
   assert.equal(fs.readFileSync(setup.ledgerFile, 'utf8').includes(setup.args.message), false, 'supplementary ledger must not duplicate message bodies');
   const again = await manualSend(setup.args, setup.context);
@@ -109,7 +108,7 @@ test('manual interface rejects source spoofing, unverified callers, Claude calle
     [{ ...fixture.args, sender_id: 'spoof' }, fixture.context, /only session_id/],
     [fixture.args, { ...fixture.context, metadata: {} }, /identity is unavailable/],
     [fixture.args, { ...fixture.context, env: { ...fixture.context.env, CLAUDE_CODE_MESSAGING_SOCKET: fixture.claude.pipePath } }, /only from/],
-    [{ ...fixture.args, message: 'Ж'.repeat(32769) }, fixture.context, /65536/],
+    [{ ...fixture.args, message: 'é'.repeat(32769) }, fixture.context, /65536/],
     [{ ...fixture.args, message_id: '__proto__' }, fixture.context, /valid message_id/],
     [fixture.args, { ...fixture.context, signal: aborted.signal }, /cancelled/],
   ]) await assert.rejects(manualSend(args, context), error);
@@ -256,7 +255,8 @@ test('explicit notice retry after definite failure restores full context without
   assert.equal(retried.notice_retryable, false);
   assert.equal(userFrames(fixture.claude).length, 1);
   assert.equal(fixture.notices.length, 1);
-  assert.ok(fixture.notices[0].arguments.prompt.endsWith(fixture.args.message));
+  assert.equal(fixture.notices[0].arguments.prompt,
+    `[User sent to Claude session "${fixture.args.session_id}"; bridge message "${fixture.args.message_id}"; context only]\n\n${fixture.args.message}`);
   assert.equal(fixture.notices[0].arguments.threadId, fixture.owner);
   await assert.rejects(retryManualNotice(args, fixture.context), /not safely retryable/);
   await assert.rejects(retryManualNotice({ ...args, message: 'Injected replacement text.' }, fixture.context), /only session_id/);

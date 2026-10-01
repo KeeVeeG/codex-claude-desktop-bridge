@@ -235,7 +235,7 @@ test('MCP rejects invalid and reserved message IDs before invoking the executor'
   const tool = TOOLS.find(item => item.name === 'send_to_claude');
   const specification = tool.inputSchema.properties.message_id;
   assert.equal(specification.pattern, '^[a-zA-Z0-9_-]{1,100}$');
-  for (const message_id of ['', 'space in id', '../path', 'кириллица', 'a'.repeat(101),
+  for (const message_id of ['', 'space in id', '../path', '日本語', 'a'.repeat(101),
     ...specification.not.enum]) {
     const response = await callTool(client, tool.name, { session_id: 'recipient', message: 'Text.', message_id });
     assert.equal(response.result.isError, true, message_id);
@@ -502,17 +502,17 @@ test('Codex and Claude can initiate independent addressed messages without a con
   const listed = toolValue(await callTool(setup.client, 'list_claude_sessions'));
   assert.match(JSON.stringify(listed), new RegExp(setup.sessionId));
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(setup.token));
-  const plainMessage = 'Для информации: первая часть готова. Ответ не нужен.\n{"branch":"feature/unicode","custom":{"revision":7}}';
+  const plainMessage = 'For information: the first part is ready. No reply needed. 🦊\n{"branch":"feature/unicode","custom":{"revision":7}}';
   toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: plainMessage, message_id: 'info-one' }, meta));
-  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'Ещё информация без ожидания ответа.', message_id: 'info-two' }, meta));
+  toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: 'More information without waiting for a reply.', message_id: 'info-two' }, meta));
   const deliveries = setup.claude.messages.filter(entry => entry.message.type === 'user');
   assert.equal(deliveries.length, 2);
   assert.ok(deliveries[0].message.message.content.includes(plainMessage));
-  assert.match(JSON.stringify(deliveries[0].message), /Codex task origin-mcp-chat/);
+  assert.match(deliveries[0].message.message.content, /From Codex Desktop task "origin-mcp-chat"; bridge message "info-one"\]/);
   assert.doesNotMatch(deliveries[0].message.message.content, /connection_token|reply_token|ack_codex_request|PowerShell syntax|Deadline:/);
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  const independent = 'Независимое замечание Claude.\n{"kind":"observation","custom":["α","β"]}';
+  const independent = 'Independent Claude note.\n{"kind":"observation","custom":["α","β"]}';
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: independent, message_id: 'claude-info-one' }));
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: 'Another independent update.', message_id: 'claude-info-two' }));
   assert.equal(setup.notifications.length, 2);
@@ -521,10 +521,10 @@ test('Codex and Claude can initiate independent addressed messages without a con
   for (const call of setup.notifications) assert.equal(call.arguments.threadId, 'origin-mcp-chat');
   const codexStatus = toolValue(await callTool(setup.client, 'bridge_status', { limit: 10 }, meta));
   const claudeStatus = toolValue(await callTool(peer, 'bridge_status', { limit: 10 }));
-  assert.match(JSON.stringify(codexStatus), /первая часть готова/);
-  assert.doesNotMatch(JSON.stringify(codexStatus), /Независимое замечание/);
-  assert.match(JSON.stringify(claudeStatus), /Независимое замечание/);
-  assert.doesNotMatch(JSON.stringify(claudeStatus), /первая часть готова/);
+  assert.match(JSON.stringify(codexStatus), /first part is ready/);
+  assert.doesNotMatch(JSON.stringify(codexStatus), /Independent Claude note/);
+  assert.match(JSON.stringify(claudeStatus), /Independent Claude note/);
+  assert.doesNotMatch(JSON.stringify(claudeStatus), /first part is ready/);
   assert.ok(codexStatus.messages.every(message => message.route.from.kind === 'codex' && message.route.from.id === 'origin-mcp-chat'));
   assert.ok(claudeStatus.messages.every(message => message.route.from.kind === 'claude' && message.route.from.id === setup.sessionId));
   assert.equal(getSession({ stateDir: setup.stateDir, threadId: 'environment-fallback' }), null);
@@ -733,7 +733,7 @@ test('two Codex tasks and two Claude sessions can freely send to every opposite-
     'codex-target-a', 'codex-target-b', 'codex-target-a', 'codex-target-b',
   ]);
   for (const codexId of ['codex-target-a', 'codex-target-b']) {
-    assert.ok([...deliveriesA, ...deliveriesB].some(entry => JSON.stringify(entry.message).includes(`Codex task ${codexId}`)));
+    assert.ok([...deliveriesA, ...deliveriesB].some(entry => entry.message.message.content.includes(`From Codex Desktop task "${codexId}"; bridge message`)));
     const status = toolValue(await callTool(setup.client, 'bridge_status', {}, metadata(codexId)));
     assert.equal(status.messages.length, 2);
     assert.ok(status.messages.every(message => message.route.from.kind === 'codex' && message.route.from.id === codexId));
@@ -745,7 +745,8 @@ test('two Codex tasks and two Claude sessions can freely send to every opposite-
     assert.doesNotMatch(JSON.stringify(status), new RegExp(`From ${otherId} to`));
   }
   for (const call of setup.notifications) {
-    assert.ok([setup.sessionId, sessionB].some(id => call.arguments.prompt.includes(`Claude Desktop session ${JSON.stringify(id)}`)));
+    assert.ok([setup.sessionId, sessionB].some(id => call.arguments.prompt.includes(`Claude Desktop session ${JSON.stringify(id)}; bridge message`)));
+    assert.doesNotMatch(call.arguments.prompt, /context only/);
   }
 });
 

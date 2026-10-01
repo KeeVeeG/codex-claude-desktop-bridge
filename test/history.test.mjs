@@ -31,7 +31,7 @@ test('bridge exchange joins both directions only for the exact owner and Claude 
   const outgoing = ledger(fixture, 'owning-task');
   const incoming = ledger(fixture, `claude:${sessionId}`);
   const unrelated = ledger(fixture, 'another-task');
-  message(outgoing, { kind: 'codex', id: 'owning-task' }, { kind: 'claude', id: sessionId }, 'outgoing', 'Full user message.\nUnicode: Привет', 'submitted', true);
+  message(outgoing, { kind: 'codex', id: 'owning-task' }, { kind: 'claude', id: sessionId }, 'outgoing', 'Full user message.\nUnicode: こんにちは', 'submitted', true);
   message(incoming, { kind: 'claude', id: sessionId }, { kind: 'codex', id: 'owning-task' }, 'incoming', 'Full Claude reply.', 'uncertain');
   message(outgoing, { kind: 'codex', id: 'owning-task' }, { kind: 'claude', id: otherSession }, 'elsewhere', 'Other recipient');
   message(incoming, { kind: 'claude', id: sessionId }, { kind: 'codex', id: 'another-task' }, 'other-owner', 'Reply for another owner');
@@ -40,7 +40,7 @@ test('bridge exchange joins both directions only for the exact owner and Claude 
   assert.deepEqual(result.messages.map(value => value.id).sort(), ['incoming', 'outgoing']);
   assert.equal(result.messages.find(value => value.id === 'incoming').status, 'uncertain');
   assert.equal(result.messages.find(value => value.id === 'outgoing').manual, true);
-  assert.equal(result.messages.find(value => value.id === 'outgoing').message, 'Full user message.\nUnicode: Привет');
+  assert.equal(result.messages.find(value => value.id === 'outgoing').message, 'Full user message.\nUnicode: こんにちは');
   assert.doesNotMatch(JSON.stringify(result), /fingerprint|senderPid|procStart|spoofed-owner|Other recipient|Reply for another owner/);
   assert.equal(result.next_cursor, null);
   assert.equal(result.has_more, false);

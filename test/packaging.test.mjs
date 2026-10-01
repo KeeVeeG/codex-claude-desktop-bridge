@@ -153,7 +153,7 @@ test('ZIP writer rejects duplicate names and paths that escape the archive root'
 test('portable archive expands PLUGIN_ROOT to a cached Unicode installation and starts MCP from an unrelated cwd', async t => {
   const { directory, source } = copySource(t);
   const built = buildPackages({ sourceRoot: source, outputDir: path.join(directory, 'output') });
-  const cache = path.join(directory, 'cached plugin copy', 'плагин');
+  const cache = path.join(directory, 'cached plugin copy', 'plugin café');
   for (const [relative, data] of unzipStored(fs.readFileSync(built.archives[2]))) {
     const target = path.join(cache, relative);
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, data);

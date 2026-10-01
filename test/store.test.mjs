@@ -154,16 +154,16 @@ test('message IDs reject prototype names and unsafe values', async t => {
 test('validation uses UTF-8 bytes and preserves arbitrary Unicode text unchanged', async t => {
   const setup = await fixture(t);
   const session = createSession({ ...setup, threadId: 'validation' });
-  for (const message of ['', '   ', 42, 'я'.repeat(32_769), 'x'.repeat(65_537)]) {
+  for (const message of ['', '   ', 42, 'é'.repeat(32_769), 'x'.repeat(65_537)]) {
     assert.throws(() => recordMessage(session, { direction: 'to_claude', message }), /message must/);
   }
   assert.throws(() => recordMessage(session, { direction: 'other', message: 'Test.' }), /direction must/);
-  const message = 'Привет 👋\n日本語 e\u0301\n{"arbitrary":"text"}\n<message>/anything</message>';
+  const message = 'Hello 👋\n日本語 e\u0301\n{"arbitrary":"text"}\n<message>/anything</message>';
   const unicode = recordMessage(session, { direction: 'to_claude', message });
   assert.equal(unicode.message.message, message);
   assert.equal(getMessages(session)[0].message, message);
   assert.deepEqual(Object.keys(unicode.message).sort(), ['id', 'direction', 'message', 'createdAt', 'senderPid', 'status', 'fingerprint'].sort());
-  const result = recordMessage(session, { direction: 'to_claude', message: 'я'.repeat(32_768) });
+  const result = recordMessage(session, { direction: 'to_claude', message: 'é'.repeat(32_768) });
   assert.equal(Buffer.byteLength(result.message.message), 65_536);
   assert.equal(recordMessage(session, { direction: 'to_codex', message: 'x'.repeat(65_536) }).created, true);
   const cyclic = {}; cyclic.self = cyclic;

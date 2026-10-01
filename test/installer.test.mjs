@@ -199,7 +199,7 @@ test('staged Codex and Claude configurations start the complete MCP catalog from
   const originalCodex = fs.readFileSync(sourceCodexPath, 'utf8');
   const originalClaude = fs.readFileSync(sourceClaudeConfigPath, 'utf8');
   const prepared = prepareInstallation({ sourceRoot: root, homeDir });
-  const copiedRoot = path.join(homeDir, 'installed copy with spaces', 'плагин Claude Codex');
+  const copiedRoot = path.join(homeDir, 'installed copy with spaces', 'Claude Codex plugin café');
   // Node 22 on Windows may omit dot-prefixed plugin directories in a recursive
   // copy. Copy the staged runtime allowlist explicitly for this launch probe.
   for (const relative of RUNTIME_FILES) {
@@ -348,7 +348,7 @@ test('Claude permission grant preserves settings, backs up exact previous bytes,
 test('Claude permission grant respects a custom config directory and leaves the default profile untouched', t => {
   const { homeDir } = fixture(t);
   const defaultFile = path.join(homeDir, '.claude', 'settings.json');
-  const customDir = path.join(homeDir, 'custom Claude config', 'профиль');
+  const customDir = path.join(homeDir, 'custom Claude config', 'profile café');
   fs.mkdirSync(path.dirname(defaultFile), { recursive: true });
   fs.writeFileSync(defaultFile, '{"model":"default-profile"}\n');
   grantClaudeSendPermission({ homeDir, env: { CLAUDE_CONFIG_DIR: customDir } });

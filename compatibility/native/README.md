@@ -94,11 +94,11 @@ Open the **Claude** conversation panel beside the current Codex chat. The panel 
 
 When the panel is opened from a model tool call, it requests the host's fullscreen display mode so the conversation view does not expand into a tall inline card. The thread entrypoint remains tied to the current Codex chat.
 
-Type a message in the panel to send it manually. The message is marked as a manual user send, and the bridge adds a notice containing the full text and destination to the owning Codex chat. The current native interface creates a Codex turn for this notice; its text identifies it as context rather than a new task. Sender identity comes from the panel host's per-call thread metadata, never a thread ID supplied by the widget.
+Type a message in the panel to send it manually. The bridge adds the same text to the owning Codex chat with a compact English header identifying the user send, recipient session, and bridge message ID. The header marks it as context only, without a separate status block. Transport details remain in local delivery records, accessible through `bridge_status`. The current native interface creates a Codex turn for this notice; it is not a new task. Sender identity comes from the panel host's per-call thread metadata, never a thread ID supplied by the widget.
 
 The composer follows Codex's `desktop.composerEnterBehavior` setting when it is available in the local configuration. With the default `enter` behavior, Enter sends and Shift+Enter inserts a newline; `cmdIfMultiline` and `cmdAlways` are also supported.
 
-The public panel chrome, statuses, errors, accessibility labels, and demo fixtures are English-only. Conversation titles, project paths, and exchanged messages remain verbatim so user content is never translated or altered.
+The public panel chrome, system notices, statuses, errors, accessibility labels, and demo fixtures are English-only. Conversation titles, project paths, and exchanged messages remain verbatim so user content is never translated or altered. A successful send displays "Sent to Claude"; read receipts are unavailable, so this status does not wait for a read confirmation.
 
 Historical Claude Code conversations can appear without a live inbox. Their saved bridge history stays readable, but sending requires that exact conversation to be open as a live Desktop Code session. The panel does not launch a separate CLI conversation. This catalog covers local Code sessions, not Claude's ordinary hosted Chat conversations.
 
