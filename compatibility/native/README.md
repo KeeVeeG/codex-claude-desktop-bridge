@@ -92,6 +92,8 @@ Use `bridge_doctor` when discovery or delivery stops working. It checks the loca
 
 Open the **Claude** conversation panel beside the current Codex chat. The panel is intentionally scoped to that chat so its owner and delivery context stay explicit; it does not add a global sidebar app. It lists previously contacted Claude conversations for the current Codex chat and all discoverable local Claude Code conversations, with search by title or project folder. Selecting a conversation shows exchanged bridge messages in both directions, with pagination for earlier messages. The history is scoped to the exact Codex/Claude pair; it does not import the recipient's unrelated native transcript.
 
+When the panel is opened from a model tool call, it requests the host's fullscreen display mode so the conversation view does not expand into a tall inline card. The thread entrypoint remains tied to the current Codex chat.
+
 Type a message in the panel to send it manually. The message is marked as a manual user send, and the bridge adds a notice containing the full text and destination to the owning Codex chat. The current native interface creates a Codex turn for this notice; its text identifies it as context rather than a new task. Sender identity comes from the panel host's per-call thread metadata, never a thread ID supplied by the widget.
 
 The composer follows Codex's `desktop.composerEnterBehavior` setting when it is available in the local configuration. With the default `enter` behavior, Enter sends and Shift+Enter inserts a newline; `cmdIfMultiline` and `cmdAlways` are also supported.

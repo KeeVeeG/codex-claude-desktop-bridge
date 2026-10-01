@@ -338,7 +338,7 @@ export async function runMcpServer({ input = process.stdin, output = process.std
       const html = await fs.promises.readFile(new URL('../ui/bridge.html', import.meta.url), 'utf8');
       respond({ contents: [{ uri: panelUri, mimeType: 'text/html;profile=mcp-app', text: html,
         _meta: { ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } },
-          'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'] },
+          'openai/ui': { preferredDisplayMode: 'fullscreen', availableDisplayModes: ['inline', 'fullscreen'] },
           'openai/widgetDescription': 'Local Claude Code conversation picker, exchanged bridge messages, and manual sending from the current Codex chat.' } }] });
       return;
     }

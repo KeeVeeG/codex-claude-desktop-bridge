@@ -54,6 +54,8 @@ test('MCP Apps resource is self-contained and only the registered UI URI can be 
   assert.match(content.text, /ui\/initialize/);
   assert.doesNotMatch(content.text, /<script[^>]+src=["']https?:|<link[^>]+href=["']https?:/i);
   assert.deepEqual(content._meta.ui.csp.connectDomains, []);
+  assert.equal(content._meta['openai/ui'].preferredDisplayMode, 'fullscreen');
+  assert.deepEqual(content._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen']);
   assert.equal((await client.rpc('resources/read', { uri: '../.mcp.json' })).error.code, -32602);
   assert.equal(calls, 0, 'Reading UI assets must not invoke a send or a service tool.');
 });
