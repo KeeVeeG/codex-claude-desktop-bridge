@@ -62,7 +62,8 @@ test('human manual send preserves full text and provenance and posts one context
   assert.equal(userFrames(setup.claude).length, 1);
   const received = userFrames(setup.claude)[0].message.message.content;
   assert.match(received, /User sent from Codex Desktop task/);
-  assert.ok(received.endsWith(setup.args.message));
+  assert.ok(received.includes(setup.args.message));
+  assert.match(received, /^<cross-session-message[\s\S]*<\/cross-session-message>$/);
   assert.equal(setup.notices.length, 1);
   assert.equal(setup.notices[0].threadId, setup.owner);
   assert.equal(setup.notices[0].arguments.threadId, setup.owner);

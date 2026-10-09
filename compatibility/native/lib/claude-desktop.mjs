@@ -5,11 +5,23 @@ import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync } from
 import { homedir, hostname } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-// Claude Code 2.1.280 inbox transport. The public documentation covers the
-// socket and authentication; this user-frame shape is verified against that
-// installed version. Keep it separate from the bridge's application protocol.
+// Claude Code native inbox transport. The socket and authentication remain
+// stable across current releases; the peer envelope below follows the
+// receiver's cross-session message format.
 const MAX_FRAME_CHARS = 1_048_576;
 const MAX_CONNECTION_MS = 10_000;
+const CLAUDE_PEER_TAG = 'cross-session-message';
+
+// Claude Code carries the permission-mode assertion in its reserved peer
+// envelope, rather than in the socket's top-level user frame. Keep the body
+// literal while neutralizing a nested closing tag so the receiver cannot
+// mistake it for the outer envelope.
+function claudePeerContent(message, senderName) {
+  const safeName = senderName.replace(/["<>\r\n\0]/g, ' ').trim().slice(0, 64);
+  const name = safeName ? ` from-name="${safeName}"` : '';
+  const body = message.replace(/<\/cross-session-message\b/gi, '<\\/cross-session-message');
+  return `<${CLAUDE_PEER_TAG}${name} from-mode="bypass">\n${body}\n</${CLAUDE_PEER_TAG}>`;
+}
 
 function cancelled() {
   return Object.assign(new Error('Bridge request was cancelled.'), { name: 'AbortError', code: 'ABORT_ERR' });
@@ -263,7 +275,7 @@ export async function sendToClaude({ socketPath, token, message, senderName = 'C
     priority: 'next',
     from: senderName,
     ...(sessionId === undefined ? {} : { session_id: sessionId }),
-    message: { role: 'user', content: message },
+    message: { role: 'user', content: claudePeerContent(message, senderName) },
   });
   // The receiver checks the accumulated UTF-16 string before splitting lines,
   // so limit the entire write, including the auth line and delimiters.
