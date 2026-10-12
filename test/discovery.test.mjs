@@ -139,3 +139,12 @@ test('Codex host returns only defined registry metadata', async t => {
   fs.writeFileSync(path.join(setup.stateDir, 'codex-host.json'), JSON.stringify({ ...valid, unrelated: 'ignore' }));
   assert.deepEqual(getCodexHost({ stateDir: setup.stateDir }), valid);
 });
+
+test('Claude socket canonicalization accepts normalized absolute Unix paths off Windows', { skip: process.platform === 'win32' }, () => {
+  assert.equal(canonicalClaudeSocket('/tmp/cc-socks/123.sock'), '/tmp/cc-socks/123.sock');
+  assert.equal(canonicalClaudeSocket('/tmp/cc-socks/../123.sock'), null);
+  assert.equal(canonicalClaudeSocket('/tmp/cc-socks/'), null);
+  assert.equal(canonicalClaudeSocket('relative/123.sock'), null);
+  assert.equal(canonicalClaudeSocket(`/tmp/${'a'.repeat(120)}.sock`), null);
+  assert.equal(canonicalClaudeSocket('/tmp/x\n.sock'), null);
+});

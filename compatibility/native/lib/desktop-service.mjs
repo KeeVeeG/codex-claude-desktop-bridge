@@ -142,8 +142,9 @@ async function bridgeDoctor(context, config) {
   checkCancellation(signal);
   const checks = [];
   const add = (name, status, detail) => checks.push({ name, status, detail });
-  add('platform', process.platform === 'win32' ? 'pass' : 'fail',
-    process.platform === 'win32' ? 'Windows Desktop transports are supported.' : 'Native Desktop discovery requires Windows.');
+  add('platform', process.platform === 'win32' ? 'pass' : 'warning',
+    process.platform === 'win32' ? 'Windows Desktop transports are supported.'
+      : 'Claude Unix-socket delivery is supported; the Codex Desktop transport is unverified on this platform.');
   checks.push({ name: 'state_directory', ...inspectStateDirectory(config.stateDir) });
   let application = config.env.CLAUDE_CODE_MESSAGING_SOCKET ? 'claude'
     : config.env.CODEX_APP_TOOLS_PIPE_PATH ? 'codex' : 'unknown';

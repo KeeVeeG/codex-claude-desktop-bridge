@@ -31,10 +31,21 @@ function checkCancellation(signal) {
   if (signal?.aborted) throw cancelled();
 }
 
+// macOS and Linux sun_path limits are 104 and 108 bytes; stay under the smaller.
+const MAX_UNIX_SOCKET_PATH = 103;
+
+function canonicalUnixSocket(socketPath) {
+  if (process.platform === 'win32' || !isAbsolute(socketPath) || socketPath.length > MAX_UNIX_SOCKET_PATH) return null;
+  // Reject traversal and unnormalized forms so the registry key hash is stable.
+  if (resolve(socketPath) !== socketPath || socketPath.endsWith('/')) return null;
+  return socketPath;
+}
+
 export function canonicalClaudeSocket(socketPath) {
   if (typeof socketPath !== 'string' || /[\r\n\0]/.test(socketPath)) return null;
   const match = /^[\\/]{2}[.?][\\/]pipe[\\/](?:(LOCAL)[\\/])?([^\\/]+)$/i.exec(socketPath);
-  if (!match || ['.', '..'].includes(match[2]) || /[. ]$/.test(match[2])) return null;
+  if (!match) return canonicalUnixSocket(socketPath);
+  if (['.', '..'].includes(match[2]) || /[. ]$/.test(match[2])) return null;
   if (socketPath.startsWith('\\\\?\\') && socketPath.includes('/')) return null;
   const name = `${match[1] ? 'LOCAL\\' : ''}${match[2]}`.replace(/[A-Z]/g, letter => letter.toLowerCase());
   return `\\\\.\\pipe\\${name}`;
