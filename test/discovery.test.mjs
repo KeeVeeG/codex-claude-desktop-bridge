@@ -119,14 +119,16 @@ test('Codex host reader retries a replacement between stat and open', async t =>
 
 test('Codex host rejects remote endpoints, invalid context, and malformed registry contents', async t => {
   const setup = await nativeFixture(t);
-  for (const pipePath of ['https://example.invalid', '\\\\remote\\pipe\\app', '/tmp/socket', '\\\\.\\pipe\\trailing.']) {
-    assert.throws(() => publishCodexHost({ stateDir: setup.stateDir, pipePath, threadId: 'known' }), /local Windows named pipe/);
+  const rejected = ['https://example.invalid', '\\\\remote\\pipe\\app', '\\\\.\\pipe\\trailing.'];
+  if (process.platform === 'win32') rejected.push('/tmp/socket');
+  for (const pipePath of rejected) {
+    assert.throws(() => publishCodexHost({ stateDir: setup.stateDir, pipePath, threadId: 'known' }), /named pipe/);
   }
   assert.throws(() => publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\app', threadId: '' }), /context task ID/);
   const valid = publishCodexHost({ stateDir: setup.stateDir, pipePath: '\\\\.\\pipe\\app', threadId: 'known' });
   const file = path.join(setup.stateDir, 'codex-host.json');
   fs.writeFileSync(file, JSON.stringify({ ...valid, pipePath: '\\\\remote\\pipe\\app' }));
-  assert.throws(() => getCodexHost({ stateDir: setup.stateDir }), /local Windows named pipe/);
+  assert.throws(() => getCodexHost({ stateDir: setup.stateDir }), /named pipe/);
   fs.writeFileSync(file, '{broken');
   assert.throws(() => getCodexHost({ stateDir: setup.stateDir }), /Invalid Codex host registry JSON/);
   fs.writeFileSync(file, 'x'.repeat(20_000));
@@ -160,4 +162,13 @@ test('Claude inbox key may name its process-start field procStart (macOS) or pro
   assert.equal(resolveClaudeSession(record.sessionId, { registryDir: setup.registryDir }).token, '2'.repeat(32));
   fs.writeFileSync(keyPath, JSON.stringify({ peerToken: '2'.repeat(32), procStart: 'other', pidDomain: 'darwin' }));
   assert.throws(() => resolveClaudeSession(record.sessionId, { registryDir: setup.registryDir }), /key does not match/);
+});
+
+test('Codex host registry accepts an absolute Unix socket endpoint off Windows', { skip: process.platform === 'win32' }, async t => {
+  const fixture = await nativeFixture(t);
+  const stateDir = path.join(fixture.root, 'state');
+  publishCodexHost({ stateDir, pipePath: '/tmp/codex-browser-use/abc.sock', threadId: 'thread-1' });
+  assert.equal(getCodexHost({ stateDir }).pipePath, '/tmp/codex-browser-use/abc.sock');
+  assert.throws(() => publishCodexHost({ stateDir, pipePath: '/tmp/../x.sock', threadId: 'thread-1' }), /named pipe or absolute Unix socket/);
+  assert.throws(() => publishCodexHost({ stateDir, pipePath: 'relative.sock', threadId: 'thread-1' }), /named pipe or absolute Unix socket/);
 });
