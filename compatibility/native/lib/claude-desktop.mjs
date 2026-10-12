@@ -176,7 +176,7 @@ export function resolveClaudeSession(sessionId, { registryDir } = {}) {
     throw new Error('The chosen Claude session has no readable regular inbox key. Reopen that Code session.');
   }
   if (typeof key.peerToken !== 'string' || !/^[a-f0-9]{32}$/.test(key.peerToken) ||
-      key.procStartFt !== record.procStart || key.pidDomain !== record.pidDomain) {
+      (key.procStartFt ?? key.procStart) !== record.procStart || key.pidDomain !== record.pidDomain) {
     throw new Error('Claude inbox key does not match the selected session process.');
   }
   // Catch a restart or registry replacement that occurred during the key read.

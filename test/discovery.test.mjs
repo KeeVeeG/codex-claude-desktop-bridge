@@ -148,3 +148,16 @@ test('Claude socket canonicalization accepts normalized absolute Unix paths off 
   assert.equal(canonicalClaudeSocket(`/tmp/${'a'.repeat(120)}.sock`), null);
   assert.equal(canonicalClaudeSocket('/tmp/x\n.sock'), null);
 });
+
+test('Claude inbox key may name its process-start field procStart (macOS) or procStartFt (Windows)', { skip: process.platform === 'win32' }, async t => {
+  const setup = await callerFixture(t);
+  const { resolveClaudeSession } = await import('../lib/claude-desktop.mjs');
+  const record = { ...setup.record, entrypoint: 'claude-desktop', pidDomain: 'darwin', pid: process.pid };
+  fs.writeFileSync(path.join(setup.registryDir, `${record.pid}.json`), JSON.stringify(record));
+  const hash = createHash('sha256').update(canonicalClaudeSocket(record.messagingSocketPath)).digest('hex');
+  const keyPath = path.join(setup.registryDir, `${record.pid}.${hash}.key`);
+  fs.writeFileSync(keyPath, JSON.stringify({ peerToken: '2'.repeat(32), procStart: record.procStart, pidDomain: 'darwin' }));
+  assert.equal(resolveClaudeSession(record.sessionId, { registryDir: setup.registryDir }).token, '2'.repeat(32));
+  fs.writeFileSync(keyPath, JSON.stringify({ peerToken: '2'.repeat(32), procStart: 'other', pidDomain: 'darwin' }));
+  assert.throws(() => resolveClaudeSession(record.sessionId, { registryDir: setup.registryDir }), /key does not match/);
+});
