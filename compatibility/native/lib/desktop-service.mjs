@@ -6,7 +6,7 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
-import { openDaemon, listTerminalThreads, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
+import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
 import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
@@ -41,6 +41,7 @@ function settings(context) {
     registryDir: context.registryDir || env.CODEX_CLAUDE_BRIDGE_REGISTRY_DIR ||
       (env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, 'sessions') : undefined),
     daemon: context.daemon,
+    daemonVersion: context.daemonVersion,
   };
 }
 
@@ -211,6 +212,24 @@ async function bridgeDoctor(context, config) {
   } catch {
     add('codex_registry', 'fail', 'Saved Codex endpoint records are malformed or unreadable. Check the shared state configuration.');
   }
+  let daemonReachable = false;
+  let terminalSessions = 0;
+  try {
+    terminalSessions = (await withDaemon(config, signal, connection => listTerminalThreads(connection, { limit: 1, signal }))).length;
+    daemonReachable = true;
+    add('codex_daemon', 'pass', terminalSessions
+      ? 'The Codex daemon is reachable and lists terminal sessions.'
+      : 'The Codex daemon is reachable, but no terminal Codex session is registered yet. Start `codex` in a terminal.');
+  } catch (error) {
+    checkCancellation(signal);
+    add('codex_daemon', 'warning', `Terminal Codex sessions are unavailable: ${error.message}`);
+  }
+  const versions = await readDaemonVersions({ env: config.env, ...(config.daemonVersion ?? {}) });
+  if (versions) {
+    const differ = versions.cli && versions.server && versions.cli !== versions.server;
+    add('codex_versions', differ ? 'warning' : 'pass',
+      `Codex CLI ${versions.cli ?? 'unknown'}, daemon ${versions.server ?? 'unknown'}.${differ ? ' They differ; update or restart so both run the same version.' : ''}`);
+  }
   const current = who?.kind === 'codex' && who.transport === 'desktop' ? { pipePath: who.pipePath, threadId: who.threadId }
     : config.env.CODEX_APP_TOOLS_PIPE_PATH ? { pipePath: config.env.CODEX_APP_TOOLS_PIPE_PATH,
       threadId: config.env.CODEX_THREAD_ID } : null;
@@ -246,11 +265,11 @@ async function bridgeDoctor(context, config) {
     } catch { checkCancellation(signal); }
   }
   const codexIncomplete = !acceptedContext && codexChecked < candidates.length;
-  add('codex_tools', compatible ? 'pass' : codexIncomplete ? 'warning' : 'fail', compatible
+  add('codex_tools', compatible ? 'pass' : codexIncomplete ? 'warning' : daemonReachable ? 'warning' : 'fail', compatible
     ? 'Codex exposes compatible discovery and message tool schemas.'
     : codexIncomplete ? 'Some saved Codex endpoints were not checked within the diagnostic time budget. Availability is inconclusive.'
     : 'No checked Codex endpoint exposes compatible tools. Enable the bridge in Codex and check the application version.');
-  add('codex_context', acceptedContext ? 'pass' : codexIncomplete ? 'warning' : 'fail', acceptedContext
+  add('codex_context', acceptedContext ? 'pass' : codexIncomplete ? 'warning' : daemonReachable ? 'warning' : 'fail', acceptedContext
     ? 'Codex accepted a registered context for read-only chat discovery.'
     : codexIncomplete ? 'Some retained Codex contexts were not checked within the diagnostic time budget. Availability is inconclusive.'
     : 'No checked Codex context accepted chat discovery. Run a bridge tool from an open Codex task to refresh registration.');
@@ -284,7 +303,7 @@ async function bridgeDoctor(context, config) {
     ? 'A verified Claude inbox accepts local connections. This check sent no message.'
     : claudeIncomplete ? 'Some Claude inboxes were not checked within the diagnostic time budget. Availability is inconclusive.'
     : 'No checked Claude inbox is available with a valid session key. Reopen the intended Desktop Code session.');
-  return { application, ready: acceptedContext && inboxAvailable && checks.every(check => check.status !== 'fail'), checks };
+  return { application, ready: (acceptedContext || (daemonReachable && terminalSessions > 0)) && inboxAvailable && checks.every(check => check.status !== 'fail'), checks };
 }
 
 export async function executeBridgeTool(name, args = {}, context = {}) {

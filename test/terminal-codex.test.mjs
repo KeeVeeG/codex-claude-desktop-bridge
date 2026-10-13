@@ -173,3 +173,36 @@ test('listing fails with both reasons when neither source is available', async t
   await assert.rejects(() => executeBridgeTool('list_codex_chats', {}, setup.context),
     /Codex Desktop unavailable.*Codex terminal sessions unavailable/s);
 });
+
+test('bridge_doctor reports daemon reachability as optional and never fails a Desktop-only setup', async t => {
+  const up = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }] });
+  const upReport = await executeBridgeTool('bridge_doctor', {}, up.context);
+  const daemonCheck = upReport.checks.find(check => check.name === 'codex_daemon');
+  assert.equal(daemonCheck.status, 'pass');
+  assert.match(daemonCheck.detail, /lists terminal sessions/);
+  assert.notEqual(upReport.checks.find(check => check.name === 'codex_tools').status, 'fail');
+  const down = await claudeCallerSetup(t, { unreachable: true });
+  const downReport = await executeBridgeTool('bridge_doctor', {}, down.context);
+  const check = downReport.checks.find(item => item.name === 'codex_daemon');
+  assert.equal(check.status, 'warning');
+  assert.match(check.detail, /not reachable|not found|disabled/);
+  assert.equal(downReport.ready, false);
+});
+
+test('bridge_doctor says so when the daemon is reachable but no terminal session is registered, and never reports it ready on that alone', async t => {
+  const empty = await claudeCallerSetup(t, { threads: [] });
+  const report = await executeBridgeTool('bridge_doctor', {}, empty.context);
+  assert.match(report.checks.find(check => check.name === 'codex_daemon').detail, /no terminal Codex session is registered/);
+  assert.equal(report.ready, false);
+});
+
+test('bridge_doctor warns when the Codex CLI and daemon versions differ and stays quiet when they match', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const versions = (cli, server) => ({ command: process.execPath, args: ['-e', `console.log(JSON.stringify({cliVersion:'${cli}',appServerVersion:'${server}'}))`] });
+  const differ = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, daemonVersion: versions('0.160.0', '0.162.1') });
+  const warning = differ.checks.find(check => check.name === 'codex_versions');
+  assert.equal(warning.status, 'warning');
+  assert.match(warning.detail, /0\.160\.0.*0\.162\.1/);
+  const same = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, daemonVersion: versions('0.162.1', '0.162.1') });
+  assert.equal(same.checks.find(check => check.name === 'codex_versions').status, 'pass');
+});
