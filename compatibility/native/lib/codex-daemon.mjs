@@ -155,3 +155,80 @@ export function openDaemon({ env = process.env, command, args, signal, timeoutMs
     write(Buffer.from(upgrade.text, 'latin1'));
   });
 }
+
+const TERMINAL_ORIGINATOR = 'codex-tui';
+// Rejections that prove the daemon did not accept the input, matched on code AND an
+// anchored message. Anything else the daemon answers after a write may have started a
+// turn, so it is recorded as uncertain and never retried.
+const PRE_ACCEPTANCE = [
+  { code: -32600, pattern: /^thread not found\b/i },
+  { code: -32602, pattern: /^invalid params\b/i },
+];
+
+const summarize = thread => ({
+  thread_id: thread.id,
+  title: thread.name || thread.preview || '',
+  status: thread.status?.type ?? 'unknown',
+  cwd: thread.cwd ?? '',
+  host_id: 'local',
+  source: 'terminal',
+});
+
+export const isTerminalThread = thread => thread?.originator === TERMINAL_ORIGINATOR;
+
+export async function listTerminalThreads(connection, { limit = 30, signal } = {}) {
+  const found = [];
+  let cursor = null;
+  // Bounded: 40 pages of 50 stored threads. An exact thread ID is still resolved by thread/read.
+  for (let page = 0; page < 40 && found.length < limit; page++) {
+    const result = await connection.request('thread/list', { limit: 50, ...(cursor ? { cursor } : {}) }, { signal });
+    for (const thread of result?.data ?? []) if (isTerminalThread(thread)) found.push(summarize(thread));
+    cursor = result?.nextCursor ?? null;
+    if (!cursor) break;
+  }
+  return found.slice(0, limit);
+}
+
+export async function readTerminalThread(connection, threadId, { includeTurns = false, signal } = {}) {
+  try {
+    const result = await connection.request('thread/read', { threadId, includeTurns }, { signal });
+    return result?.thread ?? null;
+  } catch (error) {
+    if (error.rpcMessage && /thread not found/i.test(error.rpcMessage)) return null;
+    throw error;
+  }
+}
+
+function markUnknown(error) {
+  if (!error.deliveryUnknown) {
+    error.deliveryUnknown = true;
+    error.message += ' Delivery is uncertain; inspect the selected Codex session before retrying.';
+  }
+  return error;
+}
+
+async function writeInput(connection, method, params, signal) {
+  try {
+    return await connection.request(method, params, { mutating: true, signal });
+  } catch (error) {
+    // Transport-level failures (encoding overflow, a closed connection, cancellation before the
+    // write) carry no rpc fields; the connection already set deliveryUnknown when, and only when,
+    // the request had actually been written.
+    if (error.rpcMessage === undefined) throw error;
+    if (PRE_ACCEPTANCE.some(item => item.code === error.rpcCode && item.pattern.test(error.rpcMessage))) throw error;
+    throw markUnknown(error);
+  }
+}
+
+export async function sendToTerminalThread(connection, { threadId, text, messageId, signal }) {
+  const thread = await readTerminalThread(connection, threadId, { signal });
+  if (!isTerminalThread(thread)) throw new Error('The selected Codex task is not a terminal session known to the Codex daemon.');
+  const status = thread.status?.type;
+  if (status === 'notLoaded' || status === 'systemError') {
+    throw new Error('The selected Codex session is not loaded in the daemon. Open it in a Codex terminal first.');
+  }
+  if (status !== 'idle') throw new Error('The selected Codex session is busy. Try again when it is idle.');
+  const result = await writeInput(connection, 'turn/start',
+    { threadId, input: [{ type: 'text', text }], clientUserMessageId: messageId }, signal);
+  return { method: 'turn/start', turnId: result?.turn?.id ?? null };
+}
