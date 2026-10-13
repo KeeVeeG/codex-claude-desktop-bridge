@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DaemonUnavailableError, openDaemon } from '../lib/codex-daemon.mjs';
+import { DaemonUnavailableError, openDaemon, readDaemonVersions } from '../lib/codex-daemon.mjs';
 import { fakeDaemon } from './codex-daemon-helpers.mjs';
 
 test('openDaemon completes the WebSocket upgrade, initializes, and answers requests', async t => {
@@ -170,4 +170,10 @@ test('error classification: proven pre-acceptance rejections fail cleanly, every
   await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'term-1', text: 'x', messageId: 'm' }),
     error => error.deliveryUnknown === true);
   connection.close();
+});
+
+test('the version check honors the kill switch from the process environment but not for an injected command', async () => {
+  assert.equal(await readDaemonVersions({ env: { PATH: process.env.PATH } }), null);
+  assert.deepEqual(await readDaemonVersions({ env: { PATH: process.env.PATH }, command: process.execPath,
+    args: ['-e', "console.log(JSON.stringify({cliVersion:'1',appServerVersion:'2'}))"] }), { cli: '1', server: '2' });
 });

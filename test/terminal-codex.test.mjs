@@ -206,3 +206,33 @@ test('bridge_doctor warns when the Codex CLI and daemon versions differ and stay
   const same = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, daemonVersion: versions('0.162.1', '0.162.1') });
   assert.equal(same.checks.find(check => check.name === 'codex_versions').status, 'pass');
 });
+
+async function listenInbox(t, claude) {
+  const server = net.createServer(socket => { socket.on('data', () => {}); socket.on('error', () => {}); });
+  await new Promise(resolve => server.listen(claude.record.messagingSocketPath, resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+}
+
+test('bridge_doctor is ready for a terminal-only setup: daemon reachable, a session registered, live inbox', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }] });
+  await listenInbox(t, setup);
+  const report = await executeBridgeTool('bridge_doctor', {}, setup.context);
+  assert.equal(report.checks.find(check => check.name === 'claude_inbox').status, 'pass');
+  assert.equal(report.checks.find(check => check.name === 'codex_daemon').status, 'pass');
+  assert.equal(report.ready, true, JSON.stringify(report.checks.filter(check => check.status === 'fail')));
+});
+
+test('bridge_doctor is not ready with a live inbox when the daemon has no terminal session or is unreachable', async t => {
+  const empty = await claudeCallerSetup(t, { threads: [] });
+  await listenInbox(t, empty);
+  const emptyReport = await executeBridgeTool('bridge_doctor', {}, empty.context);
+  assert.equal(emptyReport.checks.find(check => check.name === 'claude_inbox').status, 'pass');
+  assert.match(emptyReport.checks.find(check => check.name === 'codex_daemon').detail, /no terminal Codex session is registered/);
+  assert.equal(emptyReport.ready, false);
+  const down = await claudeCallerSetup(t, { unreachable: true });
+  await listenInbox(t, down);
+  const downReport = await executeBridgeTool('bridge_doctor', {}, down.context);
+  assert.equal(downReport.checks.find(check => check.name === 'claude_inbox').status, 'pass');
+  assert.equal(downReport.checks.find(check => check.name === 'codex_daemon').status, 'warning');
+  assert.equal(downReport.ready, false);
+});

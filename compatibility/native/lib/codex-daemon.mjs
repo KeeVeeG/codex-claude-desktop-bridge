@@ -235,12 +235,13 @@ export async function sendToTerminalThread(connection, { threadId, text, message
 
 /** Read the CLI and daemon versions without starting anything (`codex app-server daemon version`). */
 export function readDaemonVersions({ env = process.env, command, args } = {}) {
-  if (!command && env.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') return Promise.resolve(null);
-  const executable = command ?? resolveCodexExecutable({ env });
+  const effective = { ...process.env, ...env };
+  if (!command && effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') return Promise.resolve(null);
+  const executable = command ?? resolveCodexExecutable({ env: effective });
   if (!executable) return Promise.resolve(null);
   return new Promise(resolve => {
     execFile(executable, args ?? ['app-server', 'daemon', 'version'],
-      { windowsHide: true, timeout: 5000, env: { ...process.env, ...env } }, (error, stdout) => {
+      { windowsHide: true, timeout: 5000, env: effective }, (error, stdout) => {
         if (error) { resolve(null); return; }
         try {
           const parsed = JSON.parse(stdout);
