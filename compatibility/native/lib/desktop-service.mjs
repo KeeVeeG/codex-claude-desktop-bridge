@@ -6,7 +6,7 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
-import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
+import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, isTerminalThread, sendToTerminalThread } from './codex-daemon.mjs';
 import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
@@ -71,7 +71,7 @@ async function resolveTerminalTarget(threadId, config, signal) {
   try {
     const thread = await withDaemon(config, signal, connection => readTerminalThread(connection, threadId, { signal }));
     return isTerminalThread(thread);
-  } catch (error) {
+  } catch {
     checkCancellation(signal);
     // Daemon down or unreadable: keep today's Desktop behavior for this ID.
     return false;
@@ -190,9 +190,10 @@ async function bridgeDoctor(context, config) {
   checks.push({ name: 'state_directory', ...inspectStateDirectory(config.stateDir) });
   let application = config.env.CLAUDE_CODE_MESSAGING_SOCKET ? 'claude'
     : config.env.CODEX_APP_TOOLS_PIPE_PATH ? 'codex' : 'unknown';
+  const doctorConfig = { ...config, daemon: { ...(config.daemon ?? {}), timeoutMs: 2000 } };
   let who;
   try {
-    who = await identifyCaller(context, config);
+    who = await identifyCaller(context, doctorConfig);
     application = who.kind;
     add('caller', 'pass', 'The calling Desktop conversation has a verified runtime identity.');
   } catch {
@@ -215,7 +216,7 @@ async function bridgeDoctor(context, config) {
   let daemonReachable = false;
   let terminalSessions = 0;
   try {
-    terminalSessions = (await withDaemon(config, signal, connection => listTerminalThreads(connection, { limit: 1, signal }))).length;
+    terminalSessions = (await withDaemon(doctorConfig, signal, connection => listTerminalThreads(connection, { limit: 1, signal, timeoutMs: 2000 }))).length;
     daemonReachable = true;
     add('codex_daemon', 'pass', terminalSessions
       ? 'The Codex daemon is reachable and lists terminal sessions.'
@@ -224,7 +225,7 @@ async function bridgeDoctor(context, config) {
     checkCancellation(signal);
     add('codex_daemon', 'warning', `Terminal Codex sessions are unavailable: ${error.message}`);
   }
-  const versions = await readDaemonVersions({ env: config.env, ...(config.daemonVersion ?? {}) });
+  const versions = await readDaemonVersions({ env: config.env, timeoutMs: 2000, ...(config.daemonVersion ?? {}) });
   if (versions) {
     const differ = versions.cli && versions.server && versions.cli !== versions.server;
     add('codex_versions', differ ? 'warning' : 'pass',

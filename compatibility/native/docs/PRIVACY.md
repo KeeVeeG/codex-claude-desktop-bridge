@@ -6,6 +6,8 @@ The bridge lists conversation titles/identifiers so a sender can select a destin
 
 The plugin communicates with local application endpoints. It provides no public HTTP service, analytics endpoint, or hosted message relay. After delivery, Codex or Claude processes the message through the user's existing application/account. Those applications and their providers can process and retain conversation content under their own account settings and policies. Local transport does not mean the receiving AI application operates offline.
 
+For terminal Codex sessions the bridge launches `codex.exe app-server proxy` (no shell) and talks to Codex's local daemon. It reads the daemon's thread list, including the first-message preview and working directory of terminal sessions, to build the chat listing and to verify callers. It delivers messages into terminal sessions as a user turn, and `bridge_doctor` reports the CLI and daemon versions. Nothing leaves the machine, and message text is stored locally as before.
+
 ## Local records
 
 By default, state is stored under `~/.local/share/codex-claude-desktop-bridge` in the user's profile, shared by both applications. The local installer writes that absolute location into the staged MCP configuration; the source configuration contains no personal path. `CODEX_CLAUDE_BRIDGE_STATE_DIR` can explicitly select another shared directory. This avoids app-specific MSIX virtualization of `LOCALAPPDATA` and does not depend on the project working directory. Records include:

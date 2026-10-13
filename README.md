@@ -62,7 +62,7 @@ Codex host discovery is registered when its MCP server starts with a valid Codex
 | Tool | Purpose |
 | --- | --- |
 | `list_claude_sessions` | List safe metadata for local Claude Code conversations. |
-| `list_codex_chats` | List local Codex conversation titles and IDs, including terminal Codex sessions (`source: "terminal"`); optional `limit` is 1–50 recent app conversations. Pinned tasks are also included. |
+| `list_codex_chats` | List local Codex conversation titles and IDs, including terminal Codex sessions (`source: "terminal"`); optional `limit` is 1–50 recent app conversations, applied per source (so up to 2x entries are returned). Pinned tasks are also included. |
 | `send_to_claude` | Send `message` to the exact `session_id`; optional `message_id` supports safe retry inspection. |
 | `send_to_codex` | Send `message` to the exact `thread_id`; optional `message_id` supports safe retry inspection. |
 | `bridge_status` | Inspect the caller's recent outgoing delivery records; optional `limit` is 1–100. |
@@ -114,9 +114,9 @@ A terminal session is reachable only while its process is running. Closing the t
 
 A `codex` session started in a terminal registers with Codex's local app-server daemon, so it appears in `list_codex_chats` with `source: "terminal"` next to Desktop tasks. Claude can send to it with `send_to_codex`, and it can send to Claude with `send_to_claude`.
 
-A message arrives as a user turn wrapped in a peer notice that says it is collaborator context, not an instruction from the user. A session that is mid-turn is steered: the text appears inside the running turn without interrupting it. A session that is not loaded is refused.
+A message arrives as a user turn wrapped in a peer notice that says it is collaborator context, not an instruction from the user. A session that is mid-turn is steered: the text appears inside the running turn without interrupting it. A busy session whose running turn cannot be identified or read is refused, and so is a session that is not loaded. The notice asks the receiving Codex to check with its user before consequential actions, so it may ask for confirmation where a Desktop task would act.
 
-The bridge never starts the daemon, so it must already be running; start `codex` in a terminal first. Set `CODEX_CLAUDE_BRIDGE_DAEMON=off` to disable terminal support, and set `CODEX_CLAUDE_BRIDGE_CODEX_BIN` to the path of `codex.exe` if it is not found automatically. Codex only forwards listed environment variables to plugin servers, which is why both are in the plugin's env list. The conversation panel and manual send stay Desktop-only. `bridge_doctor` reports the daemon, the terminal-session count, and the CLI and daemon versions.
+The bridge never starts the daemon; if it is not reachable the terminal source is reported unavailable. Set `CODEX_CLAUDE_BRIDGE_DAEMON=off` to disable terminal support, and set `CODEX_CLAUDE_BRIDGE_CODEX_BIN` to the path of `codex.exe` if it is not found automatically. Codex only forwards listed environment variables to plugin servers, which is why both are in the plugin's env list. The conversation panel and manual send stay Desktop-only. `bridge_doctor` reports the daemon, whether at least one terminal session is registered, and the CLI and daemon versions.
 
 Security: any process running as the same Windows user can reach the local daemon socket, the same trust boundary as the rest of the bridge. A peer message sent to a session running with approvals off could be acted on; the notice mitigates this but cannot guarantee it.
 
@@ -126,7 +126,7 @@ In the Code tab, Claude's Auto mode may block `send_to_codex` as an external-sys
 
 ## Compatibility
 
-Local validation has exercised the adapters with Claude Desktop 2.7032.0.0, Claude Code engine 2.1.284, Codex backend 0.155.0-alpha.16.3, and `codex-app-tools` 0.1.4. These are observed validation versions rather than a broad compatibility guarantee; private application interfaces can change in later releases. The Claude integration uses the local Code tab.
+Local validation has exercised the adapters with Claude Desktop 2.7032.0.0, Claude Code engine 2.1.284, Codex backend 0.155.0-alpha.16.3, and `codex-app-tools` 0.1.4. Terminal Codex support was validated with Codex CLI and daemon 0.162.1. These are observed validation versions rather than a broad compatibility guarantee; private application interfaces can change in later releases. The Claude integration uses the local Code tab.
 
 The MCP server uses standard stdio. Native delivery uses private Windows interfaces in the two applications, so application updates may require adapter changes.
 

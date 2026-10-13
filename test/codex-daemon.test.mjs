@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DaemonUnavailableError, openDaemon, readDaemonVersions } from '../lib/codex-daemon.mjs';
 import { fakeDaemon } from './codex-daemon-helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { nativeFixture } from './native-helpers.mjs';
 
 test('openDaemon completes the WebSocket upgrade, initializes, and answers requests', async t => {
   const setup = await fakeDaemon(t, { threads: [{ id: 'a', originator: 'codex-tui' }] });
@@ -243,5 +246,51 @@ test('a stale steer on a thread that is still busy fails without delivery and wi
   t.after(() => connection.close());
   await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'still', text: 'x', messageId: 'm' }),
     error => /changed turns/.test(error.message) && !error.deliveryUnknown);
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
+
+test('a codex.cmd shim is refused with a clear message instead of throwing from spawn', async t => {
+  const fixture = await nativeFixture(t);
+  const shim = path.join(fixture.root, 'codex.cmd');
+  fs.writeFileSync(shim, '');
+  const env = { CODEX_CLAUDE_BRIDGE_CODEX_BIN: shim, CODEX_CLAUDE_BRIDGE_DAEMON: '' };
+  await assert.rejects(() => openDaemon({ env }),
+    error => error instanceof DaemonUnavailableError && /must point to codex\.exe/.test(error.message));
+  assert.equal(await readDaemonVersions({ env }), null);
+});
+
+test('an oversize running-turn read while steering is refused cleanly before any write', async t => {
+  const huge = 'x'.repeat(9 * 1024 * 1024);
+  const setup = await fakeDaemon(t, { threads: [{ id: 'huge', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-h', status: 'inProgress', items: huge }] }] });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'huge', text: 'x', messageId: 'm' }),
+    error => /session history is too large/.test(error.message) && !error.deliveryUnknown);
+  assert.equal(setup.requests().some(entry => /turn\/(start|steer)/.test(entry.method)), false);
+});
+
+test('terminal titles are collapsed to one line and capped at 200 characters', async t => {
+  const preview = `${'line one with words\n'.repeat(30)}`.slice(0, 500);
+  const setup = await fakeDaemon(t, { threads: [{ id: 'long', originator: 'codex-tui', preview }] });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  const [entry] = await listTerminalThreads(connection, { limit: 5 });
+  assert.ok(entry.title.length > 0 && entry.title.length <= 200);
+  assert.equal(/[\r\n]/.test(entry.title), false);
+});
+
+test('Windows paths in the proxy stderr are stripped from the unreachable message', async t => {
+  const setup = await fakeDaemon(t, { unreachable: true, unreachableStderr: 'cannot connect to C:\\Users\\secret\\codex.sock now\n' });
+  await assert.rejects(() => openDaemon({ ...setup.daemon }),
+    error => error instanceof DaemonUnavailableError && error.message.includes('<path>') && !/secret/.test(error.message));
+});
+
+test('a connection lost after turn/steer was written is delivery-unknown and never falls back to turn/start', async t => {
+  const setup = await fakeDaemon(t, { threads: busyThreads, dropAfter: 'turn/steer' });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'busy-turn', text: 'x', messageId: 'm' }),
+    error => error.deliveryUnknown === true);
   assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
 });

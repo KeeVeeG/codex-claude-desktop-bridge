@@ -236,3 +236,50 @@ test('bridge_doctor is not ready with a live inbox when the daemon has no termin
   assert.equal(downReport.checks.find(check => check.name === 'codex_daemon').status, 'warning');
   assert.equal(downReport.ready, false);
 });
+
+test('a Claude caller is never verified as a terminal Codex caller, even with terminal Codex metadata', async t => {
+  const threadId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: threadId, originator: 'codex-tui' }] });
+  const status = await executeBridgeTool('bridge_status', {}, { ...setup.context,
+    env: { ...setup.context.env, CLAUDE_CODE_MESSAGING_SOCKET: setup.record.messagingSocketPath }, metadata: terminalMeta(threadId) });
+  assert.equal(status.application, 'claude');
+  assert.deepEqual(setup.requests(), []);
+});
+
+test('bridge_doctor reports a codex.cmd shim as a warning instead of throwing', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const shim = path.join(setup.root, 'codex.cmd');
+  fs.writeFileSync(shim, '');
+  const report = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, daemon: undefined,
+    env: { ...setup.context.env, CODEX_CLAUDE_BRIDGE_CODEX_BIN: shim, CODEX_CLAUDE_BRIDGE_DAEMON: '' } });
+  const check = report.checks.find(item => item.name === 'codex_daemon');
+  assert.equal(check.status, 'warning');
+  assert.match(check.detail, /codex[.]exe/);
+});
+
+test('bridge_doctor does not hang on a daemon that never answers the thread list', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }], silent: 'thread/list' });
+  const started = Date.now();
+  const report = await executeBridgeTool('bridge_doctor', {}, setup.context);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
+  assert.equal(report.checks.find(check => check.name === 'codex_daemon').status, 'warning');
+});
+
+test('an abort after the turn/start write is recorded uncertain', async t => {
+  const termId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }], silent: 'turn/start' });
+  const controller = new AbortController();
+  const sending = executeBridgeTool('send_to_codex', { thread_id: termId, message: 'x', message_id: 'm-abort-late' },
+    { ...setup.context, signal: controller.signal });
+  const outcome = sending.then(() => null, error => error);
+  for (let waited = 0; waited < 5000 && !setup.requests().some(entry => entry.method === 'turn/start'); waited += 25) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.ok(setup.requests().some(entry => entry.method === 'turn/start'), 'turn/start was never written');
+  controller.abort();
+  const error = await outcome;
+  assert.equal(error?.name, 'AbortError');
+  assert.equal(error.deliveryUnknown, true);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.find(message => message.id === 'm-abort-late').status, 'uncertain');
+});

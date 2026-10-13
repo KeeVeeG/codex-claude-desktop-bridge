@@ -7,7 +7,7 @@ import { FrameDecoder } from '../../lib/ws-jsonrpc.mjs';
 
 const scenario = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (scenario.unreachable) {
-  process.stderr.write('failed to connect to socket (os error 10061)\n');
+  process.stderr.write(scenario.unreachableStderr ?? 'failed to connect to socket (os error 10061)\n');
   process.exit(1);
 }
 const log = entry => fs.appendFileSync(scenario.logFile, `${JSON.stringify(entry)}\n`);

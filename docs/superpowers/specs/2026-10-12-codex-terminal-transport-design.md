@@ -1,10 +1,10 @@
 # Codex terminal transport: design
 
-Status: draft for review. Not committed. Date: 2026-10-12.
+Status: implemented on branch feature/terminal-sessions, pending the live smoke test. Date: 2026-10-12.
 
 ## Purpose
 
-The bridge today connects **Codex Desktop** tasks and **Claude Code** sessions. A companion change (already implemented, uncommitted) lets a terminal `claude` session join as a Claude peer. This spec covers the other side: letting a **terminal Codex CLI session** (`codex` in PowerShell, originator `codex-tui`) be a bridge peer, alongside Codex Desktop tasks.
+The bridge today connects **Codex Desktop** tasks and **Claude Code** sessions. A companion change (already implemented) lets a terminal `claude` session join as a Claude peer. This spec covers the other side: letting a **terminal Codex CLI session** (`codex` in PowerShell, originator `codex-tui`) be a bridge peer, alongside Codex Desktop tasks.
 
 Success: a terminal Codex session and a Claude Code session (Desktop or terminal) can message each other by exact ID, with today's semantics: direct addressing, no pairing, no mandatory reply, no deadline, delivery records kept locally.
 

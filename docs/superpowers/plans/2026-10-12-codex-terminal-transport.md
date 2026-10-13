@@ -36,6 +36,7 @@
 5. **Bounded discovery.** Terminal discovery reads at most 40 pages of 50 stored threads (2,000). Beyond that, older terminal sessions are not listed, but an exact thread ID is still resolved by `thread/read` and can be sent to.
 6. **Listing precedence.** If the daemon positively identifies an ID as a terminal session, the listing reports it as `source: "terminal"` even if the Desktop list also contains it, matching the routing rule.
 7. **`bridge_doctor` readiness** for the terminal path requires the daemon to be reachable **and** at least one terminal session listed, and it reports CLI and daemon versions with a warning when they differ.
+8. **Caller kind is decided pipe-first.** A call with the Desktop pipe variable plus Codex metadata is a Desktop caller and never contacts the daemon; only calls without the pipe variable are verified through the daemon. This differs from the spec's "daemon originator decides". Edge case: a terminal `codex` that inherits `CODEX_APP_TOOLS_PIPE_PATH` would be treated as Desktop.
 
 ## Review Focus
 
