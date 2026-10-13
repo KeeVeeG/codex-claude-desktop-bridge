@@ -75,7 +75,18 @@ Codex tools (list_codex_chats, send_to_codex, bridge_*)
 
 The existing Desktop notice (`lib/desktop-service.mjs:315`) only identifies the source session and bridge message ID. It carries no statement that the text is peer context. For terminal sends the implementation specifies an exact envelope (peer notice, verified source ID, bridge message ID, body with any nested closing tag neutralized, mirroring `claudePeerContent` in `lib/claude-desktop.mjs`). A text label cannot enforce reduced authority: both `turn/start` and `turn/steer` submit ordinary user input, and a `--yolo` terminal will act on it. The envelope is a mitigation, not a guarantee, and the test plan includes adversarial cases (a peer message that instructs the receiver to run a command, to edit files, or to impersonate the user).
 
-### Steering (unverified)
+### Steering results (supervised probe, 2026-10-13)
+
+Run against the user's live terminal Codex session while it executed a long counting task:
+
+- **Active turn lookup:** `thread/read` with `includeTurns: true` returns turns whose `status` is the string `"inProgress"` for the running turn (turn shape: `id, rootTurnId, items, itemsView, status, error, startedAt, completedAt, durationMs`). The rule "last turn with status `inProgress`" found it.
+- **Steer accepted:** `turn/steer { threadId, expectedTurnId, input }` with the real turn ID returned `{ turnId }`. User observation: the text appeared inside the running turn, the count continued with no reset, gap, duplicate or interruption and exited successfully, the display looked normal, and the session answered `received`.
+- **Wrong turn ID:** rejected with code `-32600`, message ``expected active turn id `<given>` but found `<actual>` `` (a different turn is active).
+- **Idle thread:** rejected with code `-32600`, message `no active turn to steer`.
+
+Decision: steering stays in the design. The stale-steer fallback matches code `-32600` and a message beginning `no active turn to steer` or `expected active turn id`. Not tested: steering while the TUI is waiting on an approval prompt, and rapid repeated steers.
+
+### Steering
 
 For an `active` thread the transport reads the active turn ID and calls `turn/steer {threadId, expectedTurnId, input}`.
 - If the turn ended in between, `turn/steer` fails with a JSON-RPC error saying the turn is not active or `expectedTurnId` does not match; the exact error code and text are recorded during the probe and matched narrowly. Only that error triggers one retry as `turn/start`. Any other error, or a connection loss, is recorded as `failed` or `uncertain` with no retry. A rejected steer delivered nothing, so the retry cannot double-deliver.

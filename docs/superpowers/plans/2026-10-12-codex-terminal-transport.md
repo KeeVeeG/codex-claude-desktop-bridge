@@ -1680,6 +1680,8 @@ Expected: PASS. If `diagnostics.test.mjs` asserts an exact checks list, add `cod
 
 ### Task 10: Steering a busy terminal session (probe first)
 
+> **Probe status: COMPLETE (2026-10-13), steering approved.** The supervised probe in Step 1 was run with the user watching their live terminal session: steering worked cleanly (text appeared inside the running turn, no interruption, normal display, the session answered). Recorded results: the running turn has `status: "inProgress"`; a wrong turn ID is rejected with code `-32600` and message ``expected active turn id `X` but found `Y` ``; an idle thread is rejected with code `-32600` and message `no active turn to steer`. **Skip Step 1. Implement Steps 2-6, using the `STEER_STALE` value below (already set to the probe's real values) and the extra mismatch-wording test.** See the spec's "Steering results".
+
 **Files:**
 - Modify: `lib/codex-daemon.mjs` (`sendToTerminalThread`), `test/fixtures/fake-codex-proxy.mjs` (already answers `turn/steer`)
 - Modify: `docs/superpowers/specs/2026-10-12-codex-terminal-transport-design.md` ("Steering results" section)
@@ -1735,6 +1737,17 @@ test('a stale steer falls back to exactly one turn/start only when the thread ha
   assert.equal(idle.requests().filter(entry => entry.method === 'turn/start').length, 1);
 });
 
+test('a steer rejected for a turn-id mismatch is stale and falls back to exactly one turn/start only when the thread is now idle', async t => {
+  const mismatch = { code: -32600, message: 'expected active turn id `turn-x` but found `turn-y`' };
+  const idle = await fakeDaemon(t, { threads: [{ id: 'mismatch', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-x', status: 'inProgress' }], becomesIdleAfterSteer: true }], errors: { 'turn/steer': mismatch } });
+  const connection = await openDaemon({ ...idle.daemon });
+  t.after(() => connection.close());
+  const result = await sendToTerminalThread(connection, { threadId: 'mismatch', text: 'x', messageId: 'm-mismatch' });
+  assert.equal(result.method, 'turn/start');
+  assert.equal(idle.requests().filter(entry => entry.method === 'turn/start').length, 1);
+});
+
 test('an internal error that merely mentions an expected turn is never treated as a stale steer', async t => {
   const setup = await fakeDaemon(t, { threads: [{ id: 'internal', originator: 'codex-tui', status: { type: 'active' },
     turns: [{ id: 'turn-x', status: 'inProgress' }], becomesIdleAfterSteer: true }],
@@ -1773,7 +1786,7 @@ In `lib/codex-daemon.mjs`:
 // that merely mentions a turn can never trigger the fallback. Replace `code` and `pattern`
 // with the exact values recorded by the Step 1 probe before this task is complete; the
 // values below are the expected shape.
-const STEER_STALE = { code: -32600, pattern: /^(no active turn|turn is not active|expected turn)/i };
+const STEER_STALE = { code: -32600, pattern: /^(no active turn to steer|expected active turn id)/i };
 
 function activeTurnId(thread) {
   const running = [...(thread?.turns ?? [])].reverse()
