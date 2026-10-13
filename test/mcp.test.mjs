@@ -121,6 +121,14 @@ function toolValue(response) {
   return JSON.parse(response.result.content[0].text);
 }
 
+// A real-process listing must report the terminal daemon as disabled, proving the child never reached a real daemon.
+function toolValueWithoutDaemon(response) {
+  const value = toolValue(response);
+  assert.ok(response.result.structuredContent.warnings.some(warning => /disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off/.test(warning)),
+    JSON.stringify(response.result.structuredContent));
+  return value;
+}
+
 function isToolFailure(response) {
   return Boolean(response.error || response.result?.isError);
 }
@@ -551,12 +559,12 @@ test('Claude can discover and address a Codex chat before receiving any bridge m
   const setup = await setupMcp(t);
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  const chats = toolValue(await callTool(peer, 'list_codex_chats', { limit: 10 }));
+  const chats = toolValueWithoutDaemon(await callTool(peer, 'list_codex_chats', { limit: 10 }));
   assert.match(JSON.stringify(chats), /Target Codex A/);
   assert.match(JSON.stringify(chats), /Target Codex B/);
   assert.ok(setup.catalogCalls.length > 0);
   assert.equal(setup.catalogCalls[0].threadId, 'known-host-context');
-  toolValue(await callTool(peer, 'list_codex_chats', { limit: 50 }));
+  toolValueWithoutDaemon(await callTool(peer, 'list_codex_chats', { limit: 50 }));
   assert.equal(setup.notifications.length, 0, 'listing does not send messages');
   assert.equal(setup.claude.messages.length, 0);
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'codex-target-b', message: 'Claude started this conversation.', message_id: 'claude-first' }));
@@ -581,7 +589,7 @@ test('Claude chooses an older live Codex host when the latest registered pipe di
     threadId: 'stopped-context', pid: 2_147_483_647 });
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  const chats = toolValue(await callTool(peer, 'list_codex_chats', { limit: 2 }));
+  const chats = toolValueWithoutDaemon(await callTool(peer, 'list_codex_chats', { limit: 2 }));
   assert.equal(chats.length, 2);
   toolValue(await callTool(peer, 'send_to_codex', {
     thread_id: 'codex-target-a', message: 'Fallback host receives this.', message_id: 'fallback-host',
@@ -596,7 +604,7 @@ test('Claude chooses a retained Codex context when the latest task was removed',
     threadId: 'removed-context', pid: 2_147_483_647 });
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
-  const chats = toolValue(await callTool(peer, 'list_codex_chats', { limit: 2 }));
+  const chats = toolValueWithoutDaemon(await callTool(peer, 'list_codex_chats', { limit: 2 }));
   assert.equal(chats.length, 2);
   assert.ok(setup.catalogCalls.some(call => call.threadId === 'removed-context'));
   assert.ok(setup.catalogCalls.some(call => call.threadId === 'known-host-context'));
@@ -825,7 +833,7 @@ test('an unrelated abandoned state directory does not break Claude discovery or 
   const peer = startMcp(t, claudeEnv(setup));
   await initialize(peer);
   assert.deepEqual(toolValue(await callTool(peer, 'bridge_status')).messages, []);
-  assert.match(JSON.stringify(toolValue(await callTool(peer, 'list_codex_chats'))), /Target Codex A/);
+  assert.match(JSON.stringify(toolValueWithoutDaemon(await callTool(peer, 'list_codex_chats'))), /Target Codex A/);
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'codex-target-a', message: 'Claude works despite unrelated incomplete state.', message_id: 'abandoned-directory-note' }));
   assert.equal(setup.notifications.length, 1);
   assert.equal(setup.notifications[0].arguments.threadId, 'codex-target-a');
