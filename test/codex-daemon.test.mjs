@@ -27,7 +27,11 @@ test('an unreachable daemon is reported as unavailable and is never started', as
 });
 
 test('a missing Codex executable and the kill switch are reported as unavailable', async () => {
-  await assert.rejects(() => openDaemon({ env: { PATH: '' } }), error => error instanceof DaemonUnavailableError && /not found/.test(error.message));
+  await assert.rejects(() => openDaemon({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: '', CODEX_CLAUDE_BRIDGE_CODEX_BIN: '', PATH: '' } }),
+    error => error instanceof DaemonUnavailableError && /not found/.test(error.message));
+  // A partial env must not lift the kill switch forced on the test process.
+  await assert.rejects(() => openDaemon({ env: { PATH: process.env.PATH } }),
+    error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
   await assert.rejects(() => openDaemon({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: 'off' } }),
     error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
 });

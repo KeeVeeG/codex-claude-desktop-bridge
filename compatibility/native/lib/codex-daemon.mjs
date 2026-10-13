@@ -20,20 +20,21 @@ function checkCancellation(signal) {
 
 export function openDaemon({ env = process.env, command, args, signal, timeoutMs = 10000 } = {}) {
   try { checkCancellation(signal); } catch (error) { return Promise.reject(error); }
+  // The effective environment (for example CODEX_HOME) is the supplied one layered over the process's.
+  const effective = { ...process.env, ...env };
   let executable = command;
   if (!executable) {
-    if (env.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') {
+    if (effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') {
       return Promise.reject(new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.'));
     }
-    executable = resolveCodexExecutable({ env });
+    executable = resolveCodexExecutable({ env: effective });
     if (!executable) {
       return Promise.reject(new DaemonUnavailableError('The Codex executable was not found. Install the Codex CLI, or set CODEX_CLAUDE_BRIDGE_CODEX_BIN to the path of codex.exe.'));
     }
   }
   return new Promise((resolveOpen, rejectOpen) => {
-    // The effective environment (for example CODEX_HOME) is the supplied one layered over the process's.
     const child = spawn(executable, args ?? ['app-server', 'proxy'],
-      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...env } });
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: effective });
     const upgrade = upgradeRequest();
     const decoder = new FrameDecoder({ accept: upgrade.accept });
     const waiting = new Map();
