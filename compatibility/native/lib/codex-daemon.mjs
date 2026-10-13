@@ -220,6 +220,18 @@ async function writeInput(connection, method, params, signal) {
   }
 }
 
+// Matched on BOTH the JSON-RPC code and an anchored message, so an unrelated internal error
+// that merely mentions a turn can never trigger the fallback. Values recorded by the supervised
+// steering probe (2026-10-13): an idle thread answers "no active turn to steer", a wrong turn id
+// answers "expected active turn id `X` but found `Y`", both with code -32600.
+const STEER_STALE = { code: -32600, pattern: /^(no active turn to steer|expected active turn id)/i };
+
+function activeTurnId(thread) {
+  const running = [...(thread?.turns ?? [])].reverse()
+    .find(turn => turn.status === 'inProgress' || turn.status?.type === 'inProgress');
+  return running?.id ?? null;
+}
+
 export async function sendToTerminalThread(connection, { threadId, text, messageId, signal }) {
   const thread = await readTerminalThread(connection, threadId, { signal });
   if (!isTerminalThread(thread)) throw new Error('The selected Codex task is not a terminal session known to the Codex daemon.');
@@ -227,10 +239,29 @@ export async function sendToTerminalThread(connection, { threadId, text, message
   if (status === 'notLoaded' || status === 'systemError') {
     throw new Error('The selected Codex session is not loaded in the daemon. Open it in a Codex terminal first.');
   }
-  if (status !== 'idle') throw new Error('The selected Codex session is busy. Try again when it is idle.');
-  const result = await writeInput(connection, 'turn/start',
-    { threadId, input: [{ type: 'text', text }], clientUserMessageId: messageId }, signal);
-  return { method: 'turn/start', turnId: result?.turn?.id ?? null };
+  const input = [{ type: 'text', text }];
+  if (status === 'idle') {
+    const result = await writeInput(connection, 'turn/start', { threadId, input, clientUserMessageId: messageId }, signal);
+    return { method: 'turn/start', turnId: result?.turn?.id ?? null };
+  }
+  if (status !== 'active') throw new Error('The selected Codex session is busy. Try again when it is idle.');
+  const expectedTurnId = activeTurnId(await readTerminalThread(connection, threadId, { includeTurns: true, signal }));
+  if (!expectedTurnId) throw new Error('The selected Codex session is busy and its running turn could not be identified. Try again when it is idle.');
+  try {
+    await writeInput(connection, 'turn/steer', { threadId, expectedTurnId, input }, signal);
+    return { method: 'turn/steer', turnId: expectedTurnId };
+  } catch (error) {
+    // Any rejection that is not the narrow "turn is gone" case keeps the normal
+    // classification already applied by writeInput (uncertain unless proven pre-acceptance).
+    if (error.rpcCode !== STEER_STALE.code || !STEER_STALE.pattern.test(error.rpcMessage ?? '')) throw error;
+    // A steer rejected because the turn is gone proves nothing was accepted, so the
+    // error is discarded and replaced by fresh errors below. Re-read the thread: only a
+    // now-idle thread may take exactly one new turn; a still-busy one is a clean failure.
+    const current = await readTerminalThread(connection, threadId, { signal });
+    if (current?.status?.type !== 'idle') throw new Error('The selected Codex session changed turns while sending. Try again.');
+    const result = await writeInput(connection, 'turn/start', { threadId, input, clientUserMessageId: messageId }, signal);
+    return { method: 'turn/start', turnId: result?.turn?.id ?? null };
+  }
 }
 
 /** Read the CLI and daemon versions without starting anything (`codex app-server daemon version`). */

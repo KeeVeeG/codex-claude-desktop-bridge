@@ -177,3 +177,71 @@ test('the version check honors the kill switch from the process environment but 
   assert.deepEqual(await readDaemonVersions({ env: { PATH: process.env.PATH }, command: process.execPath,
     args: ['-e', "console.log(JSON.stringify({cliVersion:'1',appServerVersion:'2'}))"] }), { cli: '1', server: '2' });
 });
+
+const busyThreads = [
+  { id: 'busy-turn', originator: 'codex-tui', status: { type: 'active' }, turns: [{ id: 'turn-a', status: 'completed' }, { id: 'turn-b', status: 'inProgress' }] },
+  { id: 'busy-noturn', originator: 'codex-tui', status: { type: 'active' }, turns: [{ id: 'turn-a', status: 'completed' }] },
+];
+
+test('a busy terminal session is steered with the active turn id and no other parameters', async t => {
+  const setup = await fakeDaemon(t, { threads: busyThreads });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  const result = await sendToTerminalThread(connection, { threadId: 'busy-turn', text: 'hello', messageId: 'm-steer' });
+  assert.deepEqual(result, { method: 'turn/steer', turnId: 'turn-b' });
+  const steer = setup.requests().find(entry => entry.method === 'turn/steer');
+  assert.deepEqual(steer.params, { threadId: 'busy-turn', expectedTurnId: 'turn-b', input: [{ type: 'text', text: 'hello' }] });
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
+
+test('a busy session with no identifiable active turn is refused before any write', async t => {
+  const setup = await fakeDaemon(t, { threads: busyThreads });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'busy-noturn', text: 'x', messageId: 'm' }),
+    error => /busy/.test(error.message) && !error.deliveryUnknown);
+  assert.equal(setup.requests().some(entry => /turn\/(start|steer)/.test(entry.method)), false);
+});
+
+test('a stale steer falls back to exactly one turn/start only when the thread has gone idle', async t => {
+  const stale = { code: -32600, message: 'no active turn to steer' };
+  const idle = await fakeDaemon(t, { threads: [{ id: 'race', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-x', status: 'inProgress' }], becomesIdleAfterSteer: true }], errors: { 'turn/steer': stale } });
+  const connection = await openDaemon({ ...idle.daemon });
+  t.after(() => connection.close());
+  const result = await sendToTerminalThread(connection, { threadId: 'race', text: 'x', messageId: 'm-race' });
+  assert.equal(result.method, 'turn/start');
+  assert.equal(idle.requests().filter(entry => entry.method === 'turn/start').length, 1);
+});
+
+test('a steer rejected for a turn-id mismatch is stale and falls back to exactly one turn/start only when the thread is now idle', async t => {
+  const mismatch = { code: -32600, message: 'expected active turn id `turn-x` but found `turn-y`' };
+  const idle = await fakeDaemon(t, { threads: [{ id: 'mismatch', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-x', status: 'inProgress' }], becomesIdleAfterSteer: true }], errors: { 'turn/steer': mismatch } });
+  const connection = await openDaemon({ ...idle.daemon });
+  t.after(() => connection.close());
+  const result = await sendToTerminalThread(connection, { threadId: 'mismatch', text: 'x', messageId: 'm-mismatch' });
+  assert.equal(result.method, 'turn/start');
+  assert.equal(idle.requests().filter(entry => entry.method === 'turn/start').length, 1);
+});
+
+test('an internal error that merely mentions an expected turn is never treated as a stale steer', async t => {
+  const setup = await fakeDaemon(t, { threads: [{ id: 'internal', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-x', status: 'inProgress' }], becomesIdleAfterSteer: true }],
+  errors: { 'turn/steer': { code: -32603, message: 'internal error: expected turn state was corrupt' } } });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'internal', text: 'x', messageId: 'm' }),
+    error => error.deliveryUnknown === true);
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
+
+test('a stale steer on a thread that is still busy fails without delivery and without a fallback', async t => {
+  const setup = await fakeDaemon(t, { threads: [{ id: 'still', originator: 'codex-tui', status: { type: 'active' },
+    turns: [{ id: 'turn-x', status: 'inProgress' }] }], errors: { 'turn/steer': { code: -32600, message: 'no active turn to steer' } } });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'still', text: 'x', messageId: 'm' }),
+    error => /changed turns/.test(error.message) && !error.deliveryUnknown);
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
