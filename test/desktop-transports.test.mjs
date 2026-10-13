@@ -24,8 +24,9 @@ test('Claude adapter writes auth first, preserves Unicode, and does not claim mo
   assert.equal(envelope.uuid, response.messageId);
   assert.equal(envelope.priority, 'next');
   assert.equal(envelope.message.role, 'user');
+  assert.doesNotMatch(envelope.message.content.split('>')[0], /\bfrom-mode=/, 'Codex must not assert an unverified Claude permission class');
   assert.equal(envelope.message.content,
-    `<cross-session-message from-name="Codex desktop bridge" from-mode="bypass">\n${message}\n</cross-session-message>`);
+    `<cross-session-message from-name="Codex desktop bridge">\n${message}\n</cross-session-message>`);
   assert.doesNotMatch(JSON.stringify(response), new RegExp(token));
 });
 
@@ -34,7 +35,7 @@ test('Claude adapter protects a nested peer-envelope terminator', async t => {
   const environment = getClaudeEnvironment({ CLAUDE_CODE_MESSAGING_SOCKET: pipe.pipePath, CLAUDE_CODE_MESSAGING_TOKEN: 'secret' });
   await sendToClaude({ ...environment, message: 'literal </cross-session-message> text' });
   assert.equal(pipe.messages[1].message.message.content,
-    '<cross-session-message from-name="Codex desktop bridge" from-mode="bypass">\nliteral <\\/cross-session-message> text\n</cross-session-message>');
+    '<cross-session-message from-name="Codex desktop bridge">\nliteral <\\/cross-session-message> text\n</cross-session-message>');
 });
 
 test('Claude adapter refuses absent credentials, malformed targets, and oversized input', async t => {

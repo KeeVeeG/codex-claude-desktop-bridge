@@ -6,6 +6,7 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
+import { validateSshHostAlias } from './codex-ssh.mjs';
 
 export function codexIdentity(metadata = {}, env = process.env) {
   let turn = metadata['x-codex-turn-metadata'];
@@ -29,11 +30,17 @@ export function codexIdentity(metadata = {}, env = process.env) {
 
 function settings(context) {
   const env = context.env || process.env;
-  return { env,
+  return { env, sshSpawn: context.sshSpawn,
     stateDir: context.stateDir || env.CODEX_CLAUDE_BRIDGE_STATE_DIR || defaultStateDir(),
     registryDir: context.registryDir || env.CODEX_CLAUDE_BRIDGE_REGISTRY_DIR ||
       (env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, 'sessions') : undefined),
   };
+}
+
+function sshHost(config) {
+  if (process.platform !== 'darwin' || config.env.CODEX_CLAUDE_BRIDGE_SSH_HOST === undefined) return null;
+  return { sshHostAlias: validateSshHostAlias(config.env.CODEX_CLAUDE_BRIDGE_SSH_HOST),
+    ...(config.sshSpawn ? { spawnImpl: config.sshSpawn } : {}) };
 }
 
 function checkCancellation(signal) {
@@ -95,6 +102,8 @@ function senderLedger(who, config, create = false) {
 
 async function hostFor(who, config, signal) {
   checkCancellation(signal);
+  const ssh = sshHost(config);
+  if (ssh) return ssh;
   if (who.kind === 'codex') return { pipePath: who.pipePath, threadId: who.threadId };
   const hosts = getCodexHosts({ stateDir: config.stateDir });
   if (hosts.length === 0) throw new Error('Codex Desktop has not registered its bridge endpoint yet. Open Codex with the plugin enabled, or run the installer from an open Codex task.');
@@ -144,7 +153,9 @@ async function bridgeDoctor(context, config) {
   const add = (name, status, detail) => checks.push({ name, status, detail });
   add('platform', process.platform === 'win32' ? 'pass' : 'warning',
     process.platform === 'win32' ? 'Windows Desktop transports are supported.'
-      : 'Claude Unix-socket delivery is supported; the Codex Desktop transport is unverified on this platform.');
+      : process.platform === 'darwin' && config.env.CODEX_CLAUDE_BRIDGE_SSH_HOST !== undefined
+      ? 'macOS outbound Codex delivery uses the configured public SSH app-server route.'
+      : 'Claude Unix-socket delivery is supported; configure CODEX_CLAUDE_BRIDGE_SSH_HOST for macOS outbound Codex delivery.');
   checks.push({ name: 'state_directory', ...inspectStateDirectory(config.stateDir) });
   let application = config.env.CLAUDE_CODE_MESSAGING_SOCKET ? 'claude'
     : config.env.CODEX_APP_TOOLS_PIPE_PATH ? 'codex' : 'unknown';
@@ -161,60 +172,77 @@ async function bridgeDoctor(context, config) {
       : 'The direct Claude parent session could not be verified. Open the bridge in the intended Desktop Code session.');
   }
   checkCancellation(signal);
-  let hosts = [];
-  try {
-    hosts = getCodexHosts({ stateDir: config.stateDir });
-    add('codex_registry', hosts.length ? 'pass' : 'warning', hosts.length
-      ? 'Saved Codex endpoint records are valid.'
-      : 'No saved Codex endpoint is registered. Use a bridge tool in an open Codex task before discovery from Claude.');
-  } catch {
-    add('codex_registry', 'fail', 'Saved Codex endpoint records are malformed or unreadable. Check the shared state configuration.');
-  }
-  const current = who?.kind === 'codex' ? { pipePath: who.pipePath, threadId: who.threadId }
-    : config.env.CODEX_APP_TOOLS_PIPE_PATH ? { pipePath: config.env.CODEX_APP_TOOLS_PIPE_PATH,
-      threadId: config.env.CODEX_THREAD_ID } : null;
-  const seen = new Set();
-  const candidates = [current, ...hosts].filter(host => {
-    if (!host || seen.has(`${host.pipePath}\0${host.threadId}`)) return false;
-    seen.add(`${host.pipePath}\0${host.threadId}`);
-    return true;
-  });
-  let compatible = false;
   let acceptedContext = false;
-  const codexDeadline = Date.now() + 6000;
-  let codexChecked = 0;
-  let codexReason = '';
-  for (const host of candidates) {
-    if (Date.now() >= codexDeadline) break;
-    codexChecked++;
+  const sshConfigured = process.platform === 'darwin' && config.env.CODEX_CLAUDE_BRIDGE_SSH_HOST !== undefined;
+  if (sshConfigured) {
+    add('codex_registry', 'pass', 'The configured SSH route does not use the Desktop app-tools registry.');
     try {
-      if (process.platform === 'win32' ? !canonicalClaudeSocket(host.pipePath) : !path.isAbsolute(host.pipePath)) continue;
-      const tools = await listCodexTools(host.pipePath, { signal, timeoutMs: Math.min(1500, Math.max(1, codexDeadline - Date.now())) });
-      codexReason = `catalog tools: ${tools.map(tool => `${tool?.name}${tool?.namespace ? `@${tool.namespace}` : ''}`).join(', ').slice(0, 600)}`;
-      const messageTool = tools.find(tool => tool?.name === 'send_message_to_thread');
-      const listTool = tools.find(tool => tool?.name === 'list_threads');
-      if (typeof messageTool?.namespace !== 'string' || !messageTool.namespace ||
-          messageTool.inputSchema?.properties?.threadId?.type !== 'string' ||
-          messageTool.inputSchema?.properties?.prompt?.type !== 'string' ||
-          typeof listTool?.namespace !== 'string' || !listTool.namespace ||
-          !['integer', 'number'].includes(listTool.inputSchema?.properties?.limit?.type)) continue;
-      compatible = true;
-      if (typeof host.threadId !== 'string' || !host.threadId.trim()) continue;
-      await listCodexChats({ pipePath: host.pipePath, contextThreadId: host.threadId, limit: 1, signal,
-        timeoutMs: Math.min(1500, Math.max(1, codexDeadline - Date.now())) });
-      acceptedContext = true;
-      break;
-    } catch (error) { checkCancellation(signal); codexReason = `error: ${String(error?.message).slice(0, 200)}`; }
+      const chats = await listCodexChats({ ...sshHost(config), limit: 1, signal, timeoutMs: 6000 });
+      add('codex_tools', 'pass', 'The configured SSH host accepts public app-server discovery.');
+      acceptedContext = chats.some(chat => chat.status === 'idle');
+      add('codex_context', acceptedContext ? 'pass' : 'warning', acceptedContext
+        ? 'Codex Desktop has a loaded idle chat on the configured SSH host.'
+        : 'Open an idle target chat on the configured SSH host in Codex Desktop before sending.');
+    } catch (error) {
+      checkCancellation(signal);
+      add('codex_tools', 'fail', `The configured SSH route is unavailable: ${String(error.message).slice(0, 300)}`);
+      add('codex_context', 'fail', 'SSH discovery failed; the protected Desktop socket was not attempted.');
+    }
+  } else {
+    let hosts = [];
+    try {
+      hosts = getCodexHosts({ stateDir: config.stateDir });
+      add('codex_registry', hosts.length ? 'pass' : 'warning', hosts.length
+        ? 'Saved Codex endpoint records are valid.'
+        : 'No saved Codex endpoint is registered. Use a bridge tool in an open Codex task before discovery from Claude.');
+    } catch {
+      add('codex_registry', 'fail', 'Saved Codex endpoint records are malformed or unreadable. Check the shared state configuration.');
+    }
+    const current = who?.kind === 'codex' ? { pipePath: who.pipePath, threadId: who.threadId }
+      : config.env.CODEX_APP_TOOLS_PIPE_PATH ? { pipePath: config.env.CODEX_APP_TOOLS_PIPE_PATH,
+        threadId: config.env.CODEX_THREAD_ID } : null;
+    const seen = new Set();
+    const candidates = [current, ...hosts].filter(host => {
+      if (!host || seen.has(`${host.pipePath}\0${host.threadId}`)) return false;
+      seen.add(`${host.pipePath}\0${host.threadId}`);
+      return true;
+    });
+    let compatible = false;
+    const codexDeadline = Date.now() + 6000;
+    let codexChecked = 0;
+    let codexReason = '';
+    for (const host of candidates) {
+      if (Date.now() >= codexDeadline) break;
+      codexChecked++;
+      try {
+        if (process.platform === 'win32' ? !canonicalClaudeSocket(host.pipePath) : !path.isAbsolute(host.pipePath)) continue;
+        const tools = await listCodexTools(host.pipePath, { signal, timeoutMs: Math.min(1500, Math.max(1, codexDeadline - Date.now())) });
+        codexReason = `catalog tools: ${tools.map(tool => `${tool?.name}${tool?.namespace ? `@${tool.namespace}` : ''}`).join(', ').slice(0, 600)}`;
+        const messageTool = tools.find(tool => tool?.name === 'send_message_to_thread');
+        const listTool = tools.find(tool => tool?.name === 'list_threads');
+        if (typeof messageTool?.namespace !== 'string' || !messageTool.namespace ||
+            messageTool.inputSchema?.properties?.threadId?.type !== 'string' ||
+            messageTool.inputSchema?.properties?.prompt?.type !== 'string' ||
+            typeof listTool?.namespace !== 'string' || !listTool.namespace ||
+            !['integer', 'number'].includes(listTool.inputSchema?.properties?.limit?.type)) continue;
+        compatible = true;
+        if (typeof host.threadId !== 'string' || !host.threadId.trim()) continue;
+        await listCodexChats({ pipePath: host.pipePath, contextThreadId: host.threadId, limit: 1, signal,
+          timeoutMs: Math.min(1500, Math.max(1, codexDeadline - Date.now())) });
+        acceptedContext = true;
+        break;
+      } catch (error) { checkCancellation(signal); codexReason = `error: ${String(error?.message).slice(0, 200)}`; }
+    }
+    const codexIncomplete = !acceptedContext && codexChecked < candidates.length;
+    add('codex_tools', compatible ? 'pass' : codexIncomplete ? 'warning' : 'fail', compatible
+      ? 'Codex exposes compatible discovery and message tool schemas.'
+      : codexIncomplete ? 'Some saved Codex endpoints were not checked within the diagnostic time budget. Availability is inconclusive.'
+      : `No checked Codex endpoint exposes compatible tools. Enable the bridge in Codex and check the application version.${codexReason ? ` (${codexReason})` : ''}`);
+    add('codex_context', acceptedContext ? 'pass' : codexIncomplete ? 'warning' : 'fail', acceptedContext
+      ? 'Codex accepted a registered context for read-only chat discovery.'
+      : codexIncomplete ? 'Some retained Codex contexts were not checked within the diagnostic time budget. Availability is inconclusive.'
+      : 'No checked Codex context accepted chat discovery. Run a bridge tool from an open Codex task to refresh registration.');
   }
-  const codexIncomplete = !acceptedContext && codexChecked < candidates.length;
-  add('codex_tools', compatible ? 'pass' : codexIncomplete ? 'warning' : 'fail', compatible
-    ? 'Codex exposes compatible discovery and message tool schemas.'
-    : codexIncomplete ? 'Some saved Codex endpoints were not checked within the diagnostic time budget. Availability is inconclusive.'
-    : `No checked Codex endpoint exposes compatible tools. Enable the bridge in Codex and check the application version.${codexReason ? ` (${codexReason})` : ''}`);
-  add('codex_context', acceptedContext ? 'pass' : codexIncomplete ? 'warning' : 'fail', acceptedContext
-    ? 'Codex accepted a registered context for read-only chat discovery.'
-    : codexIncomplete ? 'Some retained Codex contexts were not checked within the diagnostic time budget. Availability is inconclusive.'
-    : 'No checked Codex context accepted chat discovery. Run a bridge tool from an open Codex task to refresh registration.');
   let sessions = [];
   try {
     sessions = discoverClaudeSessions({ registryDir: config.registryDir });
@@ -277,7 +305,7 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   }
   if (name === 'list_codex_chats') {
     const host = await hostFor(who, config, context.signal);
-    return listCodexChats({ pipePath: host.pipePath, contextThreadId: host.threadId, limit: args.limit || 30, signal: context.signal });
+    return listCodexChats({ ...host, contextThreadId: host.threadId, limit: args.limit || 30, signal: context.signal });
   }
   if (name === 'bridge_status') {
     const session = senderLedger(who, config);
@@ -316,8 +344,9 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
       receipt = await sendToClaude({ ...endpoint, message: notice, senderName: senderLabel(route.from.id), signal: context.signal });
     } else {
       const notice = `[From Claude Desktop session ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
-      await sendToCodex({ pipePath: host.pipePath, contextThreadId: host.threadId,
+      const delivered = await sendToCodex({ ...host, contextThreadId: host.threadId,
         threadId: route.to.id, message: notice, signal: context.signal });
+      if (host.sshHostAlias) receipt = delivered;
     }
   } catch (error) {
     try { finishMessage(session, reserved.message.id, { status: error.deliveryUnknown ? 'uncertain' : 'failed', route, error: error.message }); }

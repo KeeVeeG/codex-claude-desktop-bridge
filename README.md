@@ -4,13 +4,31 @@
 
 Asynchronous, two-way messaging between **Codex Desktop** tasks and local **Code sessions in Claude Desktop** on Windows. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
 
+On macOS, `send_to_codex` can use Codex Desktop's supported SSH-host app-server connection. This route requires explicit configuration and a loaded, idle chat on that SSH host. It does not modify either app or use Codex's protected local app-tools socket. Windows delivery retains its existing native transport.
+
 Codex and Claude are peers. Either can start a conversation, ask the other to do something, exchange ideas, or share progress. The bridge carries text and leaves its meaning and purpose to the participants.
 
 ## Requirements
 
-- Windows, Codex Desktop, and a local Claude Desktop Code session.
+- Codex Desktop and a local Claude Desktop Code session; Windows native delivery or the configured macOS SSH route described below.
 - Node.js 20+ available on `PATH`.
 - The plugin's MCP server enabled and authorized normally in both applications.
+
+### macOS SSH-host setup
+
+1. Configure an authenticated SSH alias in `~/.ssh/config`. Codex must be installed and authenticated in that host's login shell. A loopback alias on the same Mac also works when a local SSH service is available.
+2. In Codex Desktop, connect through **Settings > Connections > SSH** and open the destination chat on that connection. A chat running under **This computer** is owned by a different server even when both connections use the same filesystem.
+3. Install or update with the chosen alias:
+
+   ```sh
+   CODEX_CLAUDE_BRIDGE_SSH_HOST=my-codex-host node scripts/install.mjs
+   ```
+
+   The installer validates and pins this alias into both staged MCP configurations. Use the same alias on later updates. Direct marketplace installations must forward or configure `CODEX_CLAUDE_BRIDGE_SSH_HOST` themselves.
+4. Fully reopen Claude Desktop after the update, using its local **Code** session. Claude cloud Chat cannot reach the Mac's localhost service. Use normal MCP permissions; the adapter does not change approval mode.
+5. `list_codex_chats` lists only chats already loaded by this SSH server. `send_to_codex` accepts only idle targets and rechecks after subscribing. Wait for active work to finish before sending. It never creates a replacement thread, starts a second server, changes thread permissions, or retries a submitted turn.
+
+The SSH transport uses `/usr/bin/ssh` with batch authentication and strict host-key verification, then speaks the public WebSocket app-server protocol through `codex app-server proxy`. An unavailable configured route stops delivery; it does not fall back to the protected Desktop socket. Submitted receipts include the accepted Codex `turnId`; they do not mean the model has read or completed the turn. User-owned SSH services and credentials remain outside the bridge installer.
 
 No npm dependencies, separate Claude CLI agent, Channels, or Stop hooks are needed. Applications start the Node MCP server; agents use named tools without invoking a shell script for each message. The local installer grants one documented Claude tool permission when it installs Claude; the MCP server never changes its own permissions or bypasses a denied action.
 
