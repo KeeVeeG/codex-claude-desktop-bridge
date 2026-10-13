@@ -373,7 +373,7 @@ export async function main(args = process.argv.slice(2)) {
       pipePath: process.env.CODEX_APP_TOOLS_PIPE_PATH, threadId: process.env.CODEX_THREAD_ID });
     console.log('Registered this Codex Desktop host for local conversation discovery.');
   }
-  console.log(`Fully quit and reopen Claude Desktop when convenient so its MCP process loads this version. In Codex, start a new task or restart the app to load updated tools. Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
+  console.log(`Fully quit and reopen Claude Desktop, and restart any terminal Claude Code session, when convenient so its MCP process loads this version. In Codex, start a new task or restart the app to load updated tools. Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
   return prepared;
 }
 

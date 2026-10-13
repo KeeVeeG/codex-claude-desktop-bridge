@@ -224,6 +224,15 @@ test('MCP structured results match advertised schemas while text JSON remains co
   }
 });
 
+test('list_claude_sessions output schema accepts terminal Claude Code sessions and rejects unknown entrypoints', () => {
+  const tool = TOOLS.find(item => item.name === 'list_claude_sessions');
+  const session = entrypoint => ({ sessionId: 'terminal', pid: 123, name: 'Claude', cwd: 'C:/project', status: 'idle',
+    version: '2.1.280', entrypoint, hostSessionId: null, procStart: '123', pidDomain: 'win32:test' });
+  assertSchema({ sessions: [session('cli')] }, tool.outputSchema, 'terminal session');
+  assertSchema({ sessions: [session('claude-desktop')] }, tool.outputSchema, 'desktop session');
+  assert.throws(() => assertSchema({ sessions: [session('sdk-cli')] }, tool.outputSchema, 'unknown entrypoint'));
+});
+
 test('MCP rejects invalid and reserved message IDs before invoking the executor', async t => {
   const calls = [];
   const client = memoryMcp(t, async (name, args) => {

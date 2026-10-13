@@ -2,13 +2,13 @@
 
 [![Windows CI](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml)
 
-Asynchronous, two-way messaging between **Codex Desktop** tasks and local **Code sessions in Claude Desktop** on Windows. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
+Asynchronous, two-way messaging between **Codex Desktop** tasks and local **Claude Code sessions** on Windows, whether they run in the Claude Desktop Code tab or in a terminal such as PowerShell. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
 
 Codex and Claude are peers. Either can start a conversation, ask the other to do something, exchange ideas, or share progress. The bridge carries text and leaves its meaning and purpose to the participants.
 
 ## Requirements
 
-- Windows, Codex Desktop, and a local Claude Desktop Code session.
+- Windows, Codex Desktop, and a local Claude Code session: either the Claude Desktop Code tab or `claude` running in a terminal. Claude Desktop is not required.
 - Node.js 20+ available on `PATH`.
 - The plugin's MCP server enabled and authorized normally in both applications.
 
@@ -103,6 +103,12 @@ The public panel chrome, system notices, statuses, errors, accessibility labels,
 Historical Claude Code conversations can appear without a live inbox. Their saved bridge history stays readable, but sending requires that exact conversation to be open as a live Desktop Code session. The panel does not launch a separate CLI conversation. This catalog covers local Code sessions, not Claude's ordinary hosted Chat conversations.
 
 An uncertain Claude delivery is never automatically retried. A notice failure after a successful Claude send does not cause the original message to be sent again. When the context notice failed definitively, the panel offers `bridge_ui_retry_notice`; this retries only the Codex notice and never the original Claude delivery. The panel uses MCP Apps resources and requires a host with native MCP Apps support. Opening `ui/bridge.html#demo` outside the host shows explicitly labelled fixture data for preview, with no live application access.
+
+### Terminal Claude Code sessions
+
+A `claude` session started in PowerShell or another terminal registers the same local inbox as a Desktop Code session, so it appears in `list_claude_sessions` and can send and receive like any other session. Install the plugin with the `claude` CLI (the local installer or the marketplace commands above); no Claude Desktop is needed. A project-level `.mcp.json` copy of the server is not a substitute, because `${CLAUDE_PLUGIN_ROOT}` is only defined for installed plugins.
+
+A terminal session is reachable only while its process is running. Closing the terminal ends its inbox, and its saved bridge history stays readable. Every `claude` process under your user profile is addressable by exact session ID, the same trust boundary as Desktop sessions. Only sessions registered with the `claude-desktop` or `cli` entrypoint are listed; other entrypoints are ignored. After installing or updating, restart the terminal `claude` so it loads the current MCP server.
 
 ### Claude Desktop permissions
 

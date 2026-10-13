@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { CLAUDE_ENTRYPOINTS } from '../lib/claude-desktop.mjs';
 import { MAX_CODEX_CHAT_LIMIT } from '../lib/codex-desktop.mjs';
 
 const versions = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
@@ -29,7 +30,7 @@ const messageRecord = schema({
 }, ['id', 'route', 'direction', 'message', 'createdAt', 'status', 'fingerprint']);
 const claudeSession = schema({
   sessionId: outputText, pid: { type: 'integer' }, name: outputText, cwd: outputText,
-  status: outputText, version: outputText, entrypoint: { type: 'string', const: 'claude-desktop' },
+  status: outputText, version: outputText, entrypoint: { type: 'string', enum: [...CLAUDE_ENTRYPOINTS] },
   hostSessionId: { type: ['string', 'null'] }, procStart: outputText, pidDomain: outputText,
 }, ['sessionId', 'pid', 'name', 'cwd', 'status', 'version', 'entrypoint', 'hostSessionId', 'procStart', 'pidDomain']);
 const codexChat = schema({ thread_id: outputText, title: outputText, status: outputText,
@@ -57,8 +58,8 @@ const appToolMeta = { ui: { visibility: ['app'] }, 'openai/widgetAccessible': tr
 export const TOOLS = [
   {
     name: 'list_claude_sessions',
-    title: 'List Claude Desktop sessions',
-    description: 'List safe names and IDs of local Claude Desktop Code sessions so the user can choose the intended conversation. Does not send a message.',
+    title: 'List Claude sessions',
+    description: 'List safe names and IDs of local Claude Code sessions (Desktop Code tab or terminal) so the user can choose the intended conversation. Does not send a message.',
     inputSchema: schema(),
     outputSchema: schema({ sessions: { type: 'array', items: claudeSession } }, ['sessions']),
     annotations: { readOnlyHint: true },
@@ -73,8 +74,8 @@ export const TOOLS = [
   },
   {
     name: 'send_to_claude',
-    title: 'Send message to Claude Desktop',
-    description: 'Send a native visible text message from this Codex task to any exact local Claude Desktop Code session. The recipient can reply using the verified source task ID; no connection or acknowledgement is required.',
+    title: 'Send message to Claude',
+    description: 'Send a native visible text message from this Codex task to any exact local Claude Code session (Desktop Code tab or terminal). The recipient can reply using the verified source task ID; no connection or acknowledgement is required.',
     inputSchema: schema({
       session_id: textProperty('Exact destination Claude session UUID, found with list_claude_sessions or received in a prior message.'),
       message: messageText,

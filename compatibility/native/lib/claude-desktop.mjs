@@ -11,6 +11,9 @@ import { spawnSync } from 'node:child_process';
 const MAX_FRAME_CHARS = 1_048_576;
 const MAX_CONNECTION_MS = 10_000;
 const CLAUDE_PEER_TAG = 'cross-session-message';
+// Registry entrypoints that expose the same peer inbox: Claude Desktop's Code
+// tab and a terminal `claude` session. Other entrypoints (SDK, print mode) are not addressable.
+export const CLAUDE_ENTRYPOINTS = new Set(['claude-desktop', 'cli']);
 
 // Claude Code carries the permission-mode assertion in its reserved peer
 // envelope, rather than in the socket's top-level user frame. Keep the body
@@ -112,7 +115,7 @@ function desktopRecords(directory) {
     let record;
     try { record = readRegularJson(join(directory, filename), 65_536); } catch { continue; }
     if (record.pid !== Number(match[1]) || !Number.isSafeInteger(record.pid) || record.pid <= 0) continue;
-    if (record.entrypoint !== 'claude-desktop' || typeof record.sessionId !== 'string' || !record.sessionId) continue;
+    if (!CLAUDE_ENTRYPOINTS.has(record.entrypoint) || typeof record.sessionId !== 'string' || !record.sessionId) continue;
     if (typeof record.procStart !== 'string' || !record.procStart || typeof record.pidDomain !== 'string') continue;
     if (!canonicalPipe(record.messagingSocketPath) || !processIsAlive(record.pid)) continue;
     records.push(record);
@@ -120,7 +123,7 @@ function desktopRecords(directory) {
   return records;
 }
 
-/** List live native Claude Desktop Code sessions without exposing credentials or endpoints. */
+/** List live Claude Code sessions (Desktop Code tab or terminal) without exposing credentials or endpoints. */
 export function discoverClaudeSessions({ registryDir } = {}) {
   let directory;
   try { directory = registryLocation(registryDir); } catch (error) {
@@ -154,7 +157,7 @@ export function resolveClaudeSession(sessionId, { registryDir } = {}) {
   if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('An explicit Claude session ID is required.');
   const directory = registryLocation(registryDir);
   const records = desktopRecords(directory).filter(record => record.sessionId === sessionId);
-  if (records.length === 0) throw new Error('The chosen Claude Desktop Code session is unavailable or has no live inbox.');
+  if (records.length === 0) throw new Error('The chosen Claude Code session is unavailable or has no live inbox.');
   if (records.length !== 1) throw new Error('More than one process claims this Claude session. Close the duplicate before connecting.');
   const record = records[0];
   assertProcessStart(record);
@@ -185,7 +188,7 @@ export function resolveClaudeCaller({ registryDir, parentPid = process.ppid,
   socketPath = process.env.CLAUDE_CODE_MESSAGING_SOCKET } = {}) {
   let directory;
   try { directory = registryLocation(registryDir); } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('Claude caller is unavailable. Open the bridge in the intended Claude Desktop Code session.');
+    if (error.code === 'ENOENT') throw new Error('Claude caller is unavailable. Open the bridge in the intended Claude Code session.');
     throw error;
   }
   const ownSocket = socketPath === undefined ? null : canonicalClaudeSocket(socketPath);
@@ -196,7 +199,7 @@ export function resolveClaudeCaller({ registryDir, parentPid = process.ppid,
   const matches = desktopRecords(directory).filter(record => record.pid === parentPid &&
     (!ownSocket || canonicalClaudeSocket(record.messagingSocketPath) === ownSocket));
   if (matches.length === 0) {
-    throw new Error('Cannot identify the calling Claude Desktop Code session from its direct parent and socket. Reload its bridge MCP server; launch it directly without an intermediary shell.');
+    throw new Error('Cannot identify the calling Claude Code session from its direct parent and socket. Reload its bridge MCP server; launch it directly without an intermediary shell.');
   }
   if (matches.length !== 1) throw new Error('Claude caller identity is ambiguous; more than one session claims its messaging endpoint.');
   const matched = matches[0];
