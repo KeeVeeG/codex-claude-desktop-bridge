@@ -24,9 +24,11 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const stringArray = value => Array.isArray(value) && value.every(item => typeof item === 'string');
 const json = value => JSON.stringify(value, null, 2) + '\n';
 export const CODEX_CONTEXT_ENV_VARS = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CODEX_HOME', 'USERPROFILE', 'HOME', 'PATH',
-  'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR'];
+  'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR',
+  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON'];
 export const CLAUDE_CONTEXT_ENV_VARS = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CLAUDE_CODE_MESSAGING_SOCKET',
-  'LOCALAPPDATA', 'USERPROFILE', 'HOME', 'PATH', 'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR'];
+  'LOCALAPPDATA', 'USERPROFILE', 'HOME', 'PATH', 'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR',
+  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON'];
 
 function readBytes(rootDirectory, relative) {
   const filename = path.join(rootDirectory, relative);

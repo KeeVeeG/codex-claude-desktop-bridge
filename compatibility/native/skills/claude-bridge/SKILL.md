@@ -1,6 +1,6 @@
 ---
 name: claude-bridge
-description: Find Codex Desktop tasks and local Claude Code sessions (Desktop Code tab or terminal) by title, then send asynchronous native messages directly to any selected conversation through MCP tools. Either application can initiate and reply.
+description: Find Codex conversations (Desktop tasks or terminal sessions) and local Claude Code sessions (Desktop Code tab or terminal) by title, then send asynchronous native messages directly to any selected conversation through MCP tools. Either application can initiate and reply.
 ---
 
 # Codex–Claude Desktop Bridge
@@ -29,7 +29,7 @@ Call `send_to_claude` with the selected `session_id`, `message`, and optionally 
 
 ## Start from Claude
 
-Call `list_codex_chats` to find Codex conversations by title; optional `limit` is an integer from 1 to 50 recent app conversations. Pinned tasks are also included. If the intended title is ambiguous, ask the user to choose among the returned conversations. A known exact `thread_id` can be used without listing again.
+Call `list_codex_chats` to find Codex conversations by title. A Codex chat may be a Desktop task or a terminal `codex` session; each entry's `source` says which (terminal sessions appear only while the local Codex daemon is running). Send to either with the same tool; a terminal session that is not loaded is refused. Optional optional `limit` is an integer from 1 to 50 recent app conversations. Pinned tasks are also included. If the intended title is ambiguous, ask the user to choose among the returned conversations. A known exact `thread_id` can be used without listing again.
 
 Call `send_to_codex` with the selected `thread_id`, `message`, and optionally a unique `message_id`. The service verifies the sending Claude session through its live runtime registration. You do not need connection IDs, routing tokens, a preceding message, or a pending assignment. A normal answer in Claude's own chat is not automatically forwarded.
 
