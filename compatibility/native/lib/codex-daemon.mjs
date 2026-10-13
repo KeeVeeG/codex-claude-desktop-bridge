@@ -22,21 +22,26 @@ const CMD_SHIM_MESSAGE = 'CODEX_CLAUDE_BRIDGE_CODEX_BIN must point to codex.exe,
 // Node cannot spawn a .cmd/.bat shim without a shell, and this module never uses one.
 const isDirectExecutable = executable => /\.exe$/i.test(executable);
 
+// The injected command (tests) skips the kill switch and the .exe check.
+function resolveExecutable({ effective, command }) {
+  if (command) return command;
+  if (effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') {
+    throw new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.');
+  }
+  const executable = resolveCodexExecutable({ env: effective });
+  if (!executable) {
+    throw new DaemonUnavailableError('The Codex executable was not found. Install the Codex CLI, or set CODEX_CLAUDE_BRIDGE_CODEX_BIN to the path of codex.exe.');
+  }
+  if (!isDirectExecutable(executable)) throw new DaemonUnavailableError(CMD_SHIM_MESSAGE);
+  return executable;
+}
+
 export function openDaemon({ env = process.env, command, args, signal, timeoutMs = 10000 } = {}) {
   try { checkCancellation(signal); } catch (error) { return Promise.reject(error); }
   // The effective environment (for example CODEX_HOME) is the supplied one layered over the process's.
   const effective = { ...process.env, ...env };
-  let executable = command;
-  if (!executable) {
-    if (effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') {
-      return Promise.reject(new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.'));
-    }
-    executable = resolveCodexExecutable({ env: effective });
-    if (!executable) {
-      return Promise.reject(new DaemonUnavailableError('The Codex executable was not found. Install the Codex CLI, or set CODEX_CLAUDE_BRIDGE_CODEX_BIN to the path of codex.exe.'));
-    }
-    if (!isDirectExecutable(executable)) return Promise.reject(new DaemonUnavailableError(CMD_SHIM_MESSAGE));
-  }
+  let executable;
+  try { executable = resolveExecutable({ effective, command }); } catch (error) { return Promise.reject(error); }
   return new Promise((resolveOpen, rejectOpen) => {
     let child;
     try {
@@ -246,11 +251,19 @@ function activeTurnId(thread) {
   return running?.id ?? null;
 }
 
+/** The thread is not attached to the daemon; nothing was written, so another route may be tried. */
+export class TerminalNotLoadedError extends Error {
+  constructor(message) { super(message); this.name = 'TerminalNotLoadedError'; }
+}
+
 export async function sendToTerminalThread(connection, { threadId, text, messageId, signal }) {
   const thread = await readTerminalThread(connection, threadId, { signal });
   if (!isTerminalThread(thread)) throw new Error('The selected Codex task is not a terminal session known to the Codex daemon.');
   const status = thread.status?.type;
-  if (status === 'notLoaded' || status === 'systemError') {
+  if (status === 'notLoaded') {
+    throw new TerminalNotLoadedError('The selected Codex session is not loaded in the daemon. Open it in a Codex terminal first.');
+  }
+  if (status === 'systemError') {
     throw new Error('The selected Codex session is not loaded in the daemon. Open it in a Codex terminal first.');
   }
   const input = [{ type: 'text', text }];
@@ -288,6 +301,44 @@ export async function sendToTerminalThread(connection, { threadId, text, message
     const result = await writeInput(connection, 'turn/start', { threadId, input, clientUserMessageId: messageId }, signal);
     return { method: 'turn/start', turnId: result?.turn?.id ?? null };
   }
+}
+
+const QUEUE_TEXT_LIMIT = 24000;
+const QUEUED = /Queued message (\S+) for thread (\S+?)\.?\s*$/m;
+
+/** Deliver through `codex queue`, for terminal sessions the daemon does not hold. Never retried. */
+export function queueToTerminalThread({ threadId, text, env = process.env, signal, timeoutMs = 30000, command, args } = {}) {
+  try { checkCancellation(signal); } catch (error) { return Promise.reject(error); }
+  // Windows command lines are limited to about 32 K characters, so refuse before spawning.
+  if (typeof text === 'string' && text.length > QUEUE_TEXT_LIMIT) {
+    return Promise.reject(new Error(`The message is too long for the Codex queue route (limit ${QUEUE_TEXT_LIMIT} characters). Send a shorter message.`));
+  }
+  const effective = { ...process.env, ...env };
+  let executable;
+  try { executable = resolveExecutable({ effective, command }); } catch (error) { return Promise.reject(error); }
+  const unknown = message => markUnknown(new Error(message));
+  return new Promise((resolve, reject) => {
+    try {
+      execFile(executable, [...(args ?? []), 'queue', '--thread', threadId, '--message', text],
+        { windowsHide: true, timeout: timeoutMs, maxBuffer: 65536, env: effective, signal }, (error, stdout, stderr) => {
+          if (error) {
+            const startFailure = typeof error.code !== 'number' && ['ENOENT', 'EINVAL', 'EACCES'].includes(error.code);
+            if (startFailure) { reject(new Error('The Codex executable could not be started.')); return; }
+            if (error.code === 1 && /no rollout found for thread id|No active session found matching/i.test(String(stderr))) {
+              reject(new Error('The selected Codex session was not found in the Codex thread store.'));
+              return;
+            }
+            reject(unknown('Codex queue did not complete.'));
+            return;
+          }
+          const match = QUEUED.exec(String(stdout));
+          if (match && match[2] === threadId) resolve({ method: 'queue', queueId: match[1] });
+          else reject(unknown('Codex queue returned an unexpected answer.'));
+        });
+    } catch {
+      reject(new Error('The Codex executable could not be started.'));
+    }
+  });
 }
 
 /** Read the CLI and daemon versions without starting anything (`codex app-server daemon version`). */

@@ -68,7 +68,7 @@ Codex tools (list_codex_chats, send_to_codex, bridge_*)
 2. `thread/read` (no turns) to get `status.type`.
 3. `idle`: `turn/start` with `threadId`, `input: [{type:"text", text}]`, `clientUserMessageId = bridge message id`. **No** per-turn overrides (they persist into later turns).
 4. `active`: steering path (below).
-5. `notLoaded`/`systemError`: refuse with a clear error. Never call `thread/resume`; the daemon enforces one writer per thread and resuming risks fighting the owner.
+5. `notLoaded`: deliver through `codex queue --thread <id> --message <text>` (see "Live smoke findings, part 2"). `systemError`: refuse with a clear error. Never call `thread/resume`; the daemon enforces one writer per thread and resuming risks fighting the owner.
 6. Outcome classification follows the existing conservative rule in `lib/codex-desktop.mjs:110`, where a rejected mutating call is `deliveryUnknown` unless it is a proven pre-acceptance rejection. For the daemon: an allowlist of proven pre-acceptance errors (for example "thread not found" and invalid-params validation errors, matched by code and text and recorded during the probe) is recorded `failed`. Every other JSON-RPC error, and any connection loss after the request was written, is recorded `uncertain` and never auto-retried. Accepting `clientUserMessageId` is not treated as proof of deduplication. This matches today's store semantics (`lib/store.mjs`).
 
 ### Message framing
@@ -146,3 +146,11 @@ From a review by the terminal Codex session itself (sent through the bridge's ow
 ## Rollout
 
 Ship behind no flag; Desktop behavior is unchanged when no terminal Codex sessions exist. README gains a "Terminal Codex sessions" section; `skills/claude-bridge/SKILL.md` and tool descriptions are updated to say Codex chats may be Desktop or terminal. Version bump and release follow the existing `docs/PUBLISHING.md` process.
+
+## Live smoke findings, part 2 (2026-10-13)
+
+- Three of three fresh terminal sessions (plain `codex`, `codex --yolo`, with `-c` overrides) were `source: "cli"` and `notLoaded` in the daemon; only one older session was attached. The daemon `turn/start` route therefore cannot reach most real terminal sessions.
+- `codex queue --thread <uuid> --message <text>` was verified live: it reached an open plain session, whose owning tab showed the injected turn and its own approval prompt. The peer notice made the model ask before acting, recipient approvals stay with the owning terminal, and a sender disconnect did not cancel the turn.
+- Closed-session probe: `codex queue` exits 0 and prints `Queued message <id> for thread <id>.`, but no turn ran, the transcript was unchanged, and no new process started. Nothing executes unattended.
+- Error formats: a thread with no stored rollout exits 1 with `Error: failed to queue session message: thread/queue/add failed: failed to read thread: invalid thread-store request: no rollout found for thread id <id> (code -32603)`; an unknown name exits 1 with `Error: No active session found matching '<name>'.` (the bridge always passes a UUID).
+- Decision: add the queue route for `notLoaded` terminal threads (the daemon route keeps handling attached threads), plus rule R7: the "terminal sessions unavailable" warning is suppressed in `list_codex_chats` when Desktop succeeded and the only reason is a missing Codex executable.

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DaemonUnavailableError, openDaemon, readDaemonVersions } from '../lib/codex-daemon.mjs';
-import { fakeDaemon } from './codex-daemon-helpers.mjs';
+import { DaemonUnavailableError, TerminalNotLoadedError, openDaemon, queueToTerminalThread, readDaemonVersions } from '../lib/codex-daemon.mjs';
+import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { nativeFixture } from './native-helpers.mjs';
@@ -311,4 +311,84 @@ test('a connection lost after turn/steer was written is delivery-unknown and nev
   await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'busy-turn', text: 'x', messageId: 'm' }),
     error => error.deliveryUnknown === true);
   assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
+
+test('a notLoaded thread is refused with TerminalNotLoadedError before any write', async t => {
+  const setup = await fakeDaemon(t, { threads });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'cold-1', text: 'x', messageId: 'm' }),
+    error => error instanceof TerminalNotLoadedError && error.name === 'TerminalNotLoadedError' &&
+      /not loaded/.test(error.message) && !error.deliveryUnknown);
+});
+
+const QUEUE_ID = '01a13000-0000-7000-8000-000000000001';
+
+test('queueToTerminalThread passes the exact arguments and returns the queue id', async t => {
+  const setup = await fakeQueue(t, { mode: 'ok' });
+  const text = 'line one\nline "two" and \'three\'\ back\slash \u00e9\u4e2d\ud83d\ude00 100% $HOME';
+  const result = await queueToTerminalThread({ threadId: 'thr-1', text, ...setup.queue });
+  assert.deepEqual(result, { method: 'queue', queueId: QUEUE_ID });
+  assert.deepEqual(setup.queueCalls().map(call => call.argv), [['queue', '--thread', 'thr-1', '--message', text]]);
+});
+
+test('queueToTerminalThread classifies outcomes: clean failures versus uncertain delivery', async t => {
+  const clean = [['notfound', /not found in the Codex thread store/]];
+  for (const [mode, pattern] of clean) {
+    const setup = await fakeQueue(t, { mode });
+    await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', ...setup.queue }),
+      error => pattern.test(error.message) && !error.deliveryUnknown, mode);
+  }
+  for (const mode of ['fail', 'garbage', 'wrongthread']) {
+    const setup = await fakeQueue(t, { mode });
+    await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', ...setup.queue }),
+      error => error.deliveryUnknown === true && /Delivery is uncertain/.test(error.message), mode);
+  }
+});
+
+test('a hanging queue process times out as uncertain and promptly', async t => {
+  const setup = await fakeQueue(t, { mode: 'hang' });
+  const started = Date.now();
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', timeoutMs: 400, ...setup.queue }),
+    error => error.deliveryUnknown === true);
+  assert.ok(Date.now() - started < 5000);
+});
+
+test('an abort after the queue process started is uncertain', async t => {
+  const setup = await fakeQueue(t, { mode: 'hang' });
+  const controller = new AbortController();
+  const pending = queueToTerminalThread({ threadId: 'thr-1', text: 'x', signal: controller.signal, ...setup.queue });
+  const outcome = assert.rejects(() => pending, error => error.deliveryUnknown === true);
+  for (let i = 0; i < 200 && setup.queueCalls().length === 0; i++) await new Promise(r => setTimeout(r, 50));
+  assert.equal(setup.queueCalls().length, 1);
+  controller.abort();
+  await outcome;
+});
+
+test('queue pre-spawn refusals never start a process and are not uncertain', async t => {
+  const setup = await fakeQueue(t, { mode: 'ok' });
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x'.repeat(24001), ...setup.queue }),
+    error => /too long/.test(error.message) && !error.deliveryUnknown);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', signal: controller.signal, ...setup.queue }),
+    error => error.name === 'AbortError' && !error.deliveryUnknown);
+  assert.equal(setup.queueCalls().length, 0);
+});
+
+test('a queue executable that cannot start is a clean failure', async t => {
+  const fixture = await nativeFixture(t);
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', command: path.join(fixture.root, 'missing.exe') }),
+    error => error.message === 'The Codex executable could not be started.' && !error.deliveryUnknown);
+});
+
+test('the queue route honors the kill switch and refuses a codex.cmd shim', async t => {
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'x', text: 'y', env: { PATH: process.env.PATH } }),
+    error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
+  const fixture = await nativeFixture(t);
+  const shim = path.join(fixture.root, 'codex.cmd');
+  fs.writeFileSync(shim, '');
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'x', text: 'y',
+    env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: shim, CODEX_CLAUDE_BRIDGE_DAEMON: '' } }),
+    error => error instanceof DaemonUnavailableError && /must point to codex\.exe/.test(error.message));
 });

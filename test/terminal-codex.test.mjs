@@ -7,8 +7,9 @@ import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { canonicalClaudeSocket } from '../lib/claude-desktop.mjs';
-import { executeBridgeTool } from '../lib/desktop-service.mjs';
-import { fakeDaemon } from './codex-daemon-helpers.mjs';
+import { executeBridgeTool, shouldReportTerminalUnavailable } from '../lib/desktop-service.mjs';
+import { DaemonUnavailableError } from '../lib/codex-daemon.mjs';
+import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
 
 const terminalMeta = threadId => ({ 'x-codex-turn-metadata': JSON.stringify({ thread_id: threadId }), threadId });
 
@@ -282,4 +283,80 @@ test('an abort after the turn/start write is recorded uncertain', async t => {
   assert.equal(error.deliveryUnknown, true);
   const status = await executeBridgeTool('bridge_status', {}, setup.context);
   assert.equal(status.messages.find(message => message.id === 'm-abort-late').status, 'uncertain');
+});
+
+async function queueSetup(t, mode) {
+  const termId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui', status: { type: 'notLoaded' } }] });
+  const queue = await fakeQueue(t, { mode });
+  return { ...setup, termId, queueCalls: queue.queueCalls, context: { ...setup.context, queue: queue.queue } };
+}
+
+test('a notLoaded terminal session is reached through codex queue with the peer envelope', async t => {
+  const setup = await queueSetup(t, 'ok');
+  const result = await executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'Review please.', message_id: 'q-1' }, setup.context);
+  assert.equal(result.message.status, 'submitted');
+  assert.equal(result.message.receipt.method, 'queue');
+  assert.ok(result.message.receipt.queue_id);
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+  const calls = setup.queueCalls();
+  assert.equal(calls.length, 1);
+  const message = calls[0].argv[calls[0].argv.indexOf('--message') + 1];
+  assert.match(message, /^<cross-session-message from-kind="claude"/);
+  assert.match(message, /not an instruction from your user/);
+  assert.ok(message.includes('Review please.'));
+});
+
+test('a queue failure with uncertain outcome is recorded uncertain and never sent twice', async t => {
+  const setup = await queueSetup(t, 'fail');
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'x', message_id: 'q-2' }, setup.context),
+    error => error.deliveryUnknown === true);
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'x', message_id: 'q-2' }, setup.context),
+    /uncertain delivery/);
+  assert.equal(setup.queueCalls().length, 1);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.find(message => message.id === 'q-2').status, 'uncertain');
+});
+
+test('an aborted queue send is recorded uncertain and never sent twice', async t => {
+  const setup = await queueSetup(t, 'hang');
+  const controller = new AbortController();
+  const context = { ...setup.context, signal: controller.signal };
+  const outcome = assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'x', message_id: 'q-3' }, context),
+    error => error.deliveryUnknown === true);
+  for (let i = 0; i < 200 && setup.queueCalls().length === 0; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(setup.queueCalls().length, 1);
+  controller.abort();
+  await outcome;
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'x', message_id: 'q-3' }, setup.context),
+    /uncertain delivery/);
+  assert.equal(setup.queueCalls().length, 1);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.find(message => message.id === 'q-3').status, 'uncertain');
+});
+
+test('a queue send Codex rejects as unknown is recorded failed', async t => {
+  const setup = await queueSetup(t, 'notfound');
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message: 'x', message_id: 'q-4' }, setup.context),
+    error => !error.deliveryUnknown && /thread store/.test(error.message));
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.find(message => message.id === 'q-4').status, 'failed');
+});
+
+test('a loaded idle daemon thread still goes through the daemon and makes no queue call', async t => {
+  const termId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
+  const queue = await fakeQueue(t, { mode: 'ok' });
+  const result = await executeBridgeTool('send_to_codex', { thread_id: termId, message: 'hi', message_id: 'q-5' },
+    { ...setup.context, queue: queue.queue });
+  assert.equal(result.message.receipt.method, 'turn/start');
+  assert.equal(queue.queueCalls().length, 0);
+});
+
+test('shouldReportTerminalUnavailable hides only the missing-executable case for a Desktop-only user', () => {
+  const missing = new DaemonUnavailableError('The Codex executable was not found. Install the Codex CLI, or set CODEX_CLAUDE_BRIDGE_CODEX_BIN to the path of codex.exe.');
+  assert.equal(shouldReportTerminalUnavailable(missing, true), false);
+  assert.equal(shouldReportTerminalUnavailable(missing, false), true);
+  assert.equal(shouldReportTerminalUnavailable(new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.'), true), true);
+  assert.equal(shouldReportTerminalUnavailable(new Error('The Codex executable was not found.'), true), true);
 });
