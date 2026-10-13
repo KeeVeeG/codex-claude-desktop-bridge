@@ -84,6 +84,8 @@ Run against the user's live terminal Codex session while it executed a long coun
 - **Wrong turn ID:** rejected with code `-32600`, message ``expected active turn id `<given>` but found `<actual>` `` (a different turn is active).
 - **Idle thread:** rejected with code `-32600`, message `no active turn to steer`.
 
+**Live smoke finding (2026-10-13):** `thread/read` with `includeTurns: true` on the live terminal session returned 1308 KiB for 12 turns (16% of the 8 MiB inbound cap), so a session of roughly 70 turns would be refused as too large. `thread/turns/list { threadId, limit: 1 }` returns the newest turn (default newest-first order, summary `itemsView`) with the same turn shape in 1.4 KiB. The active-turn lookup therefore uses `thread/turns/list { limit: 1 }`; the running turn is always the newest.
+
 Decision: steering stays in the design. The stale-steer fallback matches code `-32600` and a message beginning `no active turn to steer` or `expected active turn id`. Not tested: steering while the TUI is waiting on an approval prompt, and rapid repeated steers.
 
 ### Steering

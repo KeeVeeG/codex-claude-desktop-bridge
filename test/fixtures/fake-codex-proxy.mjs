@@ -50,6 +50,15 @@ function answer(request) {
     send({ id, result: { thread: { ...publicThread(thread), ...(params.includeTurns ? { turns: thread.turns ?? [] } : {}) } } });
     return;
   }
+  if (method === 'thread/turns/list') {
+    const thread = scenario.threads.find(item => item.id === params?.threadId);
+    if (!thread) { send({ id, error: { code: -32600, message: `thread not found: ${params?.threadId}` } }); return; }
+    // Scenario turns are stored oldest first; the real method answers newest first.
+    const newestFirst = [...(thread.turns ?? [])].reverse();
+    const data = typeof params?.limit === 'number' ? newestFirst.slice(0, params.limit) : newestFirst;
+    send({ id, result: { data, nextCursor: null, backwardsCursor: null } });
+    return;
+  }
   if (method === 'turn/start') { send({ id, result: { turn: { id: 'turn-started', status: 'inProgress' } } }); return; }
   if (method === 'turn/steer') { send({ id, result: { turnId: params?.expectedTurnId } }); return; }
   send({ id, error: { code: -32601, message: `unsupported method ${method}` } });

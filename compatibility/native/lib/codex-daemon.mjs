@@ -259,9 +259,12 @@ export async function sendToTerminalThread(connection, { threadId, text, message
     return { method: 'turn/start', turnId: result?.turn?.id ?? null };
   }
   if (status !== 'active') throw new Error('The selected Codex session is busy. Try again when it is idle.');
+  // The running turn is always the newest, so a one-turn page (newest first) is enough and
+  // keeps the read far below the inbound cap even for very long sessions.
   let withTurns;
   try {
-    withTurns = await readTerminalThread(connection, threadId, { includeTurns: true, signal });
+    const page = await connection.request('thread/turns/list', { threadId, limit: 1 }, { signal });
+    withTurns = { turns: page?.data ?? [] };
   } catch (error) {
     if (/exceeds 8 MiB/.test(error.message ?? '')) {
       throw new Error('The selected Codex session is busy and its running turn could not be read because the session history is too large. Try again when it is idle.');

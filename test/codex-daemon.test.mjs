@@ -195,6 +195,24 @@ test('a busy terminal session is steered with the active turn id and no other pa
   const steer = setup.requests().find(entry => entry.method === 'turn/steer');
   assert.deepEqual(steer.params, { threadId: 'busy-turn', expectedTurnId: 'turn-b', input: [{ type: 'text', text: 'hello' }] });
   assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+  const lists = setup.requests().filter(entry => entry.method === 'thread/turns/list');
+  assert.equal(lists.length, 1);
+  assert.deepEqual(lists[0].params, { threadId: 'busy-turn', limit: 1 });
+  assert.equal(setup.requests().some(entry => entry.method === 'thread/read' && entry.params?.includeTurns === true), false);
+});
+
+test('the running turn of a long busy session is found with a single bounded turn-list read', async t => {
+  const turns = Array.from({ length: 60 }, (_, index) => ({ id: `turn-${index}`, status: 'completed' }));
+  turns.push({ id: 'turn-last', status: 'inProgress' });
+  const setup = await fakeDaemon(t, { threads: [{ id: 'long', originator: 'codex-tui', status: { type: 'active' }, turns }] });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  const result = await sendToTerminalThread(connection, { threadId: 'long', text: 'hello', messageId: 'm-long' });
+  assert.deepEqual(result, { method: 'turn/steer', turnId: 'turn-last' });
+  assert.equal(setup.requests().find(entry => entry.method === 'turn/steer').params.expectedTurnId, 'turn-last');
+  const lists = setup.requests().filter(entry => entry.method === 'thread/turns/list');
+  assert.equal(lists.length, 1);
+  assert.equal(lists[0].params.limit, 1);
 });
 
 test('a busy session with no identifiable active turn is refused before any write', async t => {
