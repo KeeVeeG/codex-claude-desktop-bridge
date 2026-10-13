@@ -5,6 +5,10 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Keep every test process off the real Codex daemon. Always force it (an inherited
+// value such as "on" must not win); only an explicitly injected fake command bypasses it.
+process.env.CODEX_CLAUDE_BRIDGE_DAEMON = 'off';
+
 const testRoot = fileURLToPath(new URL('../work/desktop-bridge-tests/', import.meta.url));
 
 export async function nativeFixture(t) {

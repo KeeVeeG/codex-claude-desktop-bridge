@@ -11,6 +11,7 @@ const tests = fs.readdirSync(path.join(root, 'test'))
 if (!tests.length) throw new Error('No tests found in test/.');
 // The lock-recovery stress tests already run several child processes. Running
 // every file concurrently can exhaust their bounded lock-acquisition deadline.
-const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], { cwd: root, stdio: 'inherit', windowsHide: true });
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], { cwd: root, stdio: 'inherit', windowsHide: true,
+  env: { ...process.env, CODEX_CLAUDE_BRIDGE_DAEMON: 'off' } });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
