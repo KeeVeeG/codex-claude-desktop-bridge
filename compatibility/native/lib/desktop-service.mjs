@@ -6,7 +6,8 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
-import { openDaemon, readTerminalThread, isTerminalThread } from './codex-daemon.mjs';
+import { openDaemon, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
+import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
   let turn = metadata['x-codex-turn-metadata'];
@@ -62,6 +63,17 @@ async function verifyTerminalCaller(threadId, config, signal) {
   }
   if (!isTerminalThread(thread)) {
     throw new Error('This Codex session is not a terminal session known to the Codex daemon, and no Desktop app-tools pipe was provided.');
+  }
+}
+
+async function resolveTerminalTarget(threadId, config, signal) {
+  try {
+    const thread = await withDaemon(config, signal, connection => readTerminalThread(connection, threadId, { signal }));
+    return isTerminalThread(thread);
+  } catch (error) {
+    checkCancellation(signal);
+    // Daemon down or unreadable: keep today's Desktop behavior for this ID.
+    return false;
   }
 }
 
@@ -316,7 +328,8 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   if ((name === 'send_to_claude') !== (who.kind === 'codex')) throw new Error(`Use ${who.kind === 'codex' ? 'send_to_claude' : 'send_to_codex'} from this application.`);
   const direction = who.kind === 'codex' ? 'to_claude' : 'to_codex';
   const endpoint = direction === 'to_claude' ? resolveClaudeSession(args.session_id, { registryDir: config.registryDir }) : null;
-  const host = direction === 'to_codex' ? await hostFor(who, config, context.signal) : null;
+  const terminalTarget = direction === 'to_codex' ? await resolveTerminalTarget(args.thread_id, config, context.signal) : false;
+  const host = direction === 'to_codex' && !terminalTarget ? await hostFor(who, config, context.signal) : null;
   const route = { from: sender(who), to: direction === 'to_claude'
     ? { kind: 'claude', id: endpoint.sessionId }
     : { kind: 'codex', id: args.thread_id } };
@@ -338,9 +351,15 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   try {
     checkCancellation(context.signal);
     if (direction === 'to_claude') {
-      const source = context.manual === true ? 'User sent from Codex Desktop task' : 'From Codex Desktop task';
+      const source = context.manual === true ? 'User sent from Codex Desktop task'
+        : who.transport === 'terminal' ? 'From Codex terminal session' : 'From Codex Desktop task';
       const notice = `[${source} ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       receipt = await sendToClaude({ ...endpoint, message: notice, senderName: senderLabel(route.from.id), signal: context.signal });
+    } else if (terminalTarget) {
+      const text = codexPeerContent({ fromKind: 'claude', fromId: route.from.id, bridgeMessageId: reserved.message.id, body: args.message });
+      const sent = await withDaemon(config, context.signal, connection => sendToTerminalThread(connection,
+        { threadId: route.to.id, text, messageId: reserved.message.id, signal: context.signal }));
+      receipt = { status: 'written', method: sent.method, turn_id: sent.turnId, acknowledged: false };
     } else {
       const notice = `[From Claude Desktop session ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       await sendToCodex({ pipePath: host.pipePath, contextThreadId: host.threadId,
