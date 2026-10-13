@@ -6,7 +6,7 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
-import { openDaemon, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
+import { openDaemon, listTerminalThreads, readTerminalThread, isTerminalThread, sendToTerminalThread, DaemonUnavailableError } from './codex-daemon.mjs';
 import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
@@ -315,8 +315,33 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
       composer_enter_behavior: readComposerEnterBehavior({ env: config.env }) };
   }
   if (name === 'list_codex_chats') {
-    const host = await hostFor(who, config, context.signal);
-    return listCodexChats({ pipePath: host.pipePath, contextThreadId: host.threadId, limit: args.limit || 30, signal: context.signal });
+    const limit = args.limit || 30;
+    const warnings = [];
+    let chats = [];
+    let desktopFailed = false;
+    let terminalFailed = false;
+    try {
+      const host = await hostFor(who, config, context.signal);
+      const desktop = await listCodexChats({ pipePath: host.pipePath, contextThreadId: host.threadId, limit, signal: context.signal });
+      chats = desktop.map(chat => ({ ...chat, source: 'desktop' }));
+    } catch (error) {
+      checkCancellation(context.signal);
+      desktopFailed = true;
+      warnings.push(`Codex Desktop unavailable: ${error.message}`);
+    }
+    try {
+      const terminal = await withDaemon(config, context.signal, connection => listTerminalThreads(connection, { limit, signal: context.signal }));
+      // The daemon positively identifies these as terminal sessions, matching the routing rule,
+      // so a terminal entry replaces a Desktop entry with the same ID.
+      const terminalIds = new Set(terminal.map(chat => chat.thread_id));
+      chats = [...chats.filter(chat => !terminalIds.has(chat.thread_id)), ...terminal];
+    } catch (error) {
+      checkCancellation(context.signal);
+      terminalFailed = true;
+      warnings.push(`Codex terminal sessions unavailable: ${error.message}`);
+    }
+    if (desktopFailed && terminalFailed) throw new Error(warnings.join(' '));
+    return { chats, warnings };
   }
   if (name === 'bridge_status') {
     const session = senderLedger(who, config);

@@ -195,7 +195,7 @@ test('MCP structured results match advertised schemas while text JSON remains co
   const values = {
     list_claude_sessions: [{ sessionId: 'recipient', pid: 123, name: 'Claude', cwd: 'C:/project', status: 'idle',
       version: '2.1.280', entrypoint: 'claude-desktop', hostSessionId: null, procStart: '123', pidDomain: 'win32:test' }],
-    list_codex_chats: [{ thread_id: 'source', title: 'Codex', status: 'idle', host_id: 'local' }],
+    list_codex_chats: [{ thread_id: 'source', title: 'Codex', status: 'idle', host_id: 'local', source: 'desktop' }],
     send_to_claude: { message: record },
     send_to_codex: { message: { ...record, route: { from: route.to, to: route.from }, direction: 'to_codex' }, retransmitted: false },
     bridge_status: { application: 'codex', sender_id: 'source', state_directory: 'C:/state', messages: [record], note: 'Submitted.', plugin_version: 'test' },
@@ -222,6 +222,12 @@ test('MCP structured results match advertised schemas while text JSON remains co
     assert.deepEqual(response.result.structuredContent, tool.name === 'list_claude_sessions' ? { sessions: values[tool.name] }
       : tool.name === 'list_codex_chats' ? { chats: values[tool.name] } : values[tool.name]);
   }
+  const warned = memoryMcp(t, async () => ({ chats: values.list_codex_chats, warnings: ['x'] }));
+  await initialize(warned);
+  const warnedResponse = await callTool(warned, 'list_codex_chats', {});
+  assert.deepEqual(warnedResponse.result.structuredContent.warnings, ['x']);
+  assert.deepEqual(toolValue(warnedResponse), values.list_codex_chats);
+  assertSchema(warnedResponse.result.structuredContent, TOOLS.find(tool => tool.name === 'list_codex_chats').outputSchema, 'list_codex_chats');
 });
 
 test('list_claude_sessions output schema accepts terminal Claude Code sessions and rejects unknown entrypoints', () => {

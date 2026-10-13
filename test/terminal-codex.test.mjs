@@ -159,3 +159,17 @@ test('a terminal Codex caller can send to a Claude session and the notice names 
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.match(received.join(''), /From Codex terminal session/);
 });
+
+test('listing returns terminal chats with a warning when Desktop is not registered', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: 'term-a', originator: 'codex-tui', name: 'Terminal A' }, { id: 'desk-a', originator: 'Codex Desktop' }] });
+  const result = await executeBridgeTool('list_codex_chats', {}, setup.context);
+  assert.deepEqual(result.chats.map(chat => [chat.thread_id, chat.source]), [['term-a', 'terminal']]);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /Codex Desktop unavailable/);
+});
+
+test('listing fails with both reasons when neither source is available', async t => {
+  const setup = await claudeCallerSetup(t, { unreachable: true });
+  await assert.rejects(() => executeBridgeTool('list_codex_chats', {}, setup.context),
+    /Codex Desktop unavailable.*Codex terminal sessions unavailable/s);
+});

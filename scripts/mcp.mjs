@@ -34,7 +34,7 @@ const claudeSession = schema({
   hostSessionId: { type: ['string', 'null'] }, procStart: outputText, pidDomain: outputText,
 }, ['sessionId', 'pid', 'name', 'cwd', 'status', 'version', 'entrypoint', 'hostSessionId', 'procStart', 'pidDomain']);
 const codexChat = schema({ thread_id: outputText, title: outputText, status: outputText,
-  cwd: outputText, host_id: outputText }, ['thread_id', 'host_id']);
+  cwd: outputText, host_id: outputText, source: { type: 'string', enum: ['desktop', 'terminal'] } }, ['thread_id', 'host_id']);
 const sendOutput = schema({ message: messageRecord, retransmitted: { type: 'boolean', const: false } }, ['message']);
 // Version the resource URI so hosts do not reuse an older panel layout.
 const panelUri = 'ui://bridge/panel-v3.html';
@@ -69,7 +69,7 @@ export const TOOLS = [
     title: 'List Codex Desktop chats',
     description: 'List safe titles and IDs of Codex Desktop conversations so Claude can choose a chat to message. Does not send a message.',
     inputSchema: schema({ limit: { type: 'integer', minimum: 1, maximum: MAX_CODEX_CHAT_LIMIT, description: 'Maximum number of recent app conversations to inspect for local Codex tasks. Pinned tasks are also included.' } }),
-    outputSchema: schema({ chats: { type: 'array', items: codexChat } }, ['chats']),
+    outputSchema: schema({ chats: { type: 'array', items: codexChat }, warnings: { type: 'array', items: outputText } }, ['chats']),
     annotations: { readOnlyHint: true },
   },
   {
@@ -199,9 +199,10 @@ function validateArguments(args, tool) {
 }
 
 function toolResult(value, isError = false, name) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value ?? null);
+  const chatList = name === 'list_codex_chats' && !isError ? (Array.isArray(value) ? value : value?.chats) : undefined;
+  const text = typeof value === 'string' ? value : JSON.stringify(chatList ?? value ?? null);
   const structuredContent = name === 'list_claude_sessions' ? { sessions: value }
-    : name === 'list_codex_chats' ? { chats: value } : value;
+    : name === 'list_codex_chats' ? { chats: chatList, ...(value?.warnings?.length ? { warnings: value.warnings } : {}) } : value;
   const panelMeta = !isError && name === 'bridge_panel' ? {
     ui: { resourceUri: panelUri },
     'ui/resourceUri': panelUri,
