@@ -16,8 +16,8 @@ export async function fakeQueue(t, scenario = {}) {
   fs.writeFileSync(scenarioFile, JSON.stringify({ mode: 'ok', ...scenario, logFile }));
   const queue = { command: process.execPath, args: [queueScript, scenarioFile] };
   const queueCalls = () => fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
-  // A hang-mode child normally dies to the timeout/abort; this is the backstop. The scenario file
-  // is the only handle on it, so switch it to a mode that exits for any late starter.
+  // A running hang child ends through execFile's timeout or abort. This only affects children that
+  // have not read the scenario file yet: they now see a mode that exits.
   t.after(() => { try { fs.writeFileSync(scenarioFile, JSON.stringify({ mode: 'ok', logFile })); } catch {} });
   return { ...fixture, queue, queueCalls };
 }

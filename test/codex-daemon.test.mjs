@@ -326,7 +326,7 @@ const QUEUE_ID = '01a13000-0000-7000-8000-000000000001';
 
 test('queueToTerminalThread passes the exact arguments and returns the queue id', async t => {
   const setup = await fakeQueue(t, { mode: 'ok' });
-  const text = 'line one\nline "two" and \'three\'\ back\slash \u00e9\u4e2d\ud83d\ude00 100% $HOME';
+  const text = 'line one\nline "two" and \'three\' back\\slash "C:\\dir\\" a\\\\"b end\\' + '\nnext \u00e9\u4e2d\ud83d\ude00 100% $HOME';
   const result = await queueToTerminalThread({ threadId: 'thr-1', text, ...setup.queue });
   assert.deepEqual(result, { method: 'queue', queueId: QUEUE_ID });
   assert.deepEqual(setup.queueCalls().map(call => call.argv), [['queue', '--thread', 'thr-1', '--message', text]]);
@@ -367,8 +367,10 @@ test('an abort after the queue process started is uncertain', async t => {
 
 test('queue pre-spawn refusals never start a process and are not uncertain', async t => {
   const setup = await fakeQueue(t, { mode: 'ok' });
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x'.repeat(24001), ...setup.queue }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x'.repeat(16001), ...setup.queue }),
     error => /too long/.test(error.message) && !error.deliveryUnknown);
+  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'a\0b', ...setup.queue }),
+    error => /NUL character/.test(error.message) && !error.deliveryUnknown);
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', signal: controller.signal, ...setup.queue }),

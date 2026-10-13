@@ -360,3 +360,22 @@ test('shouldReportTerminalUnavailable hides only the missing-executable case for
   assert.equal(shouldReportTerminalUnavailable(new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.'), true), true);
   assert.equal(shouldReportTerminalUnavailable(new Error('The Codex executable was not found.'), true), true);
 });
+
+test('a systemError terminal session is refused and never queued', async t => {
+  const termId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui', status: { type: 'systemError' } }] });
+  const queue = await fakeQueue(t, { mode: 'ok' });
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: termId, message: 'x', message_id: 'q-6' },
+    { ...setup.context, queue: queue.queue }), /not loaded/);
+  assert.equal(queue.queueCalls().length, 0);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.find(message => message.id === 'q-6').status, 'failed');
+});
+
+test('listing with no Desktop and no Codex executable reports both reasons', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const env = { ...setup.context.env, CODEX_CLAUDE_BRIDGE_DAEMON: '', CODEX_CLAUDE_BRIDGE_CODEX_BIN: '', PATH: '' };
+  const { daemon, ...rest } = setup.context;
+  await assert.rejects(() => executeBridgeTool('list_codex_chats', {}, { ...rest, env }),
+    /Codex Desktop unavailable.*Codex terminal sessions unavailable: The Codex executable was not found/s);
+});
