@@ -12,3 +12,7 @@ state.json
 state.lock*
 Thumbs.db
 .DS_Store
+# Local agent and tool caches; they can hold machine paths and usernames.
+.cache/
+.superpowers/
+.claude/settings.local.json
