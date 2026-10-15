@@ -1,8 +1,11 @@
 // macOS uses Codex's public app-server on the Desktop-configured SSH host.
 // This never opens the protected Desktop app-tools socket or starts a server.
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { normalizeCodexThreadId } from './codex-daemon.mjs';
+
+const runtimeVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const MAX_MESSAGE = 8 * 1024 * 1024;
 const MAX_HEADER = 65536;
@@ -198,7 +201,7 @@ async function connected(options) {
   try {
     await rpc.ready;
     await rpc.request('initialize', { clientInfo: { name: 'codex_claude_desktop_bridge',
-      title: 'Codex–Claude Desktop Bridge', version: '0.3.3' } });
+      title: 'Codex–Claude Desktop Bridge', version: runtimeVersion } });
     rpc.notify('initialized'); return rpc;
   } catch (error) { rpc.close(); throw error; }
 }

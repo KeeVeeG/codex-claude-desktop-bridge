@@ -13,7 +13,7 @@ npm run package
 
 The packager writes these artifacts under `dist/`:
 
-- `codex-claude-desktop-bridge-<version>.zip`: the native compatibility plugin and local installer; use this for the current Windows applications.
+- `codex-claude-desktop-bridge-<version>.zip`: the native compatibility plugin and local installer for Windows or the configured macOS SSH workflow.
 - `codex-claude-desktop-bridge-marketplace-<version>.zip`: a self-contained marketplace for both applications.
 - `codex-claude-desktop-bridge-portable-<version>.zip`: the Agent Plugins 1.0 package for hosts that provide the required native application context.
 - `marketplace/`: the same marketplace unpacked for inspection.
@@ -57,7 +57,7 @@ gh release create $tag `
   --generate-notes
 ```
 
-Do not commit `dist/`; it is ignored and is regenerated for each release. Keep the tag, package version, manifests, and checksums aligned. If a tag or release already exists, inspect it before replacing assets so an older package is not silently published under the same version. The Windows CI workflow also runs `npm test` and `npm run package` for pushes and pull requests; the local `npm run package` above is needed to create the files uploaded to the release.
+Do not commit `dist/`; it is ignored and is regenerated for each release. Keep the tag, package version, manifests, and checksums aligned. If a tag or release already exists, inspect it before replacing assets so an older package is not silently published under the same version. Windows and macOS CI also run `npm test` and `npm run package` on Node.js 20, 22, 24, and 26 for pushes and pull requests; the local `npm run package` above is needed to create the files uploaded to the release.
 
 ## Local marketplace
 
@@ -83,7 +83,7 @@ The Git catalog is named `keeveeg-desktop-bridge`. Both source catalogs select t
 
 ## Directory submission references
 
-Git and local marketplaces are separate from OpenAI's universal public directory. The current bridge depends on Windows-only local application interfaces and a stdio server. The standard public MCP submission path requires a production HTTPS endpoint, and the plugin guidelines restrict unofficial third-party connectors. A portable ZIP does not remove those architecture and review constraints. Consult OpenAI about local application support before planning public submission.
+Git and local marketplaces are separate from OpenAI's universal public directory. The current bridge depends on local application interfaces, an optional macOS SSH route, and a stdio server. The standard public MCP submission path requires a production HTTPS endpoint, and the plugin guidelines restrict unofficial third-party connectors. A portable ZIP does not remove those architecture and review constraints. Consult OpenAI about local application support before planning public submission.
 
 The current OpenAI submission guide starts with a plugin ZIP, automated metadata/skill checks, MCP connection and review, followed by publication. Some companion pages still describe earlier submission forms; use the submission guide below for the current flow. Keep reviewer credentials in the submission portal, outside release archives.
 

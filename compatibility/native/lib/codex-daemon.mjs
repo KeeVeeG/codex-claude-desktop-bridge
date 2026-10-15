@@ -3,8 +3,11 @@
 // `codex app-server proxy` (the socket's ACL blocks direct Node access).
 // This module never starts the daemon, never resumes a thread, and never uses a shell.
 import { execFile, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { FrameDecoder, encodeClose, encodePong, encodeText, upgradeRequest } from './ws-jsonrpc.mjs';
 import { resolveCodexExecutable } from './codex-binary.mjs';
+
+const runtimeVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 export class DaemonUnavailableError extends Error {
   constructor(message) { super(message); this.name = 'DaemonUnavailableError'; }
@@ -151,7 +154,7 @@ export function openDaemon({ env = process.env, command, args, signal, timeoutMs
 
     async function afterUpgrade() {
       try {
-        await request('initialize', { clientInfo: { name: 'codex-claude-desktop-bridge', title: 'Codex Claude Desktop Bridge', version: '1' } });
+        await request('initialize', { clientInfo: { name: 'codex-claude-desktop-bridge', title: 'Codex Claude Desktop Bridge', version: runtimeVersion } });
         notify('initialized', {});
         opened = true;
         clearTimeout(connectTimer);
