@@ -49,48 +49,64 @@ export class FrameDecoder {
 
   #accept;
 
-  constructor({ upgraded = false, accept = null } = {}) { this.#upgraded = upgraded; this.#accept = accept; }
+  constructor({ upgraded = false, accept = null } = {}) {
+    // The handshake check fails closed: a decoder that reads the upgrade must know the expected key.
+    if (!upgraded && typeof accept !== 'string') throw new Error('A WebSocket accept key is required to read the upgrade response.');
+    this.#upgraded = upgraded;
+    this.#accept = accept;
+  }
 
+  /** Decode a chunk. A thrown error carries `events` decoded before the invalid input. */
   push(chunk) {
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
     const events = [];
+    try {
+      this.#decode(chunk, events);
+    } catch (error) {
+      error.events = events;
+      throw error;
+    }
+    return events;
+  }
+
+  #decode(chunk, events) {
+    this.#buffer = Buffer.concat([this.#buffer, chunk]);
     if (!this.#upgraded) {
       const end = this.#buffer.indexOf('\r\n\r\n');
       if (end < 0) {
         if (this.#buffer.length > 16384) throw new Error('Codex daemon upgrade response is too large.');
-        return events;
+        return;
       }
       const head = this.#buffer.subarray(0, end).toString('latin1');
       if (!/^HTTP\/1\.1 101\b/.test(head)) throw new Error('Codex daemon refused the WebSocket upgrade.');
-      if (this.#accept !== null) {
-        const received = /^sec-websocket-accept:\s*(.+)$/im.exec(head)?.[1]?.trim();
-        if (received !== this.#accept) throw new Error('Codex daemon returned an invalid WebSocket accept key.');
-      }
+      const received = /^sec-websocket-accept:\s*(.+)$/im.exec(head)?.[1]?.trim();
+      if (received !== this.#accept) throw new Error('Codex daemon returned an invalid WebSocket accept key.');
       this.#buffer = this.#buffer.subarray(end + 4);
       this.#upgraded = true;
       events.push({ type: 'open' });
     }
     for (;;) {
-      if (this.#buffer.length < 2) return events;
+      if (this.#buffer.length < 2) return;
       const first = this.#buffer[0];
       const second = this.#buffer[1];
       const fin = (first & 0x80) !== 0;
       const opcode = first & 0x0f;
+      // No extension was negotiated, so every reserved bit must be clear.
+      if (first & 0x70) throw new Error('Codex daemon sent a frame with reserved bits set.');
       const masked = (second & 0x80) !== 0;
       let length = second & 0x7f;
       let offset = 2;
       if (length === 126) {
-        if (this.#buffer.length < 4) return events;
+        if (this.#buffer.length < 4) return;
         length = this.#buffer.readUInt16BE(2); offset = 4;
       } else if (length === 127) {
-        if (this.#buffer.length < 10) return events;
+        if (this.#buffer.length < 10) return;
         const wide = this.#buffer.readBigUInt64BE(2);
         if (wide > BigInt(MAX_MESSAGE_BYTES)) throw new Error('Codex daemon frame exceeds 8 MiB.');
         length = Number(wide); offset = 10;
       }
       if (length > MAX_MESSAGE_BYTES) throw new Error('Codex daemon frame exceeds 8 MiB.');
       const maskLength = masked ? 4 : 0;
-      if (this.#buffer.length < offset + maskLength + length) return events;
+      if (this.#buffer.length < offset + maskLength + length) return;
       const payload = Buffer.from(this.#buffer.subarray(offset + maskLength, offset + maskLength + length));
       if (masked) {
         const mask = this.#buffer.subarray(offset, offset + 4);
@@ -105,16 +121,15 @@ export class FrameDecoder {
         continue;
       }
       if (opcode === 0x2) throw new Error('Codex daemon sent an unsupported binary frame.');
-      if (opcode === 0x1 || opcode === 0x0) {
-        if (opcode === 0x0 && this.#parts.length === 0) throw new Error('Codex daemon sent an unexpected continuation frame.');
-        if (opcode === 0x1) { this.#parts = []; this.#partBytes = 0; }
-        this.#parts.push(payload);
-        this.#partBytes += payload.length;
-        if (this.#partBytes > MAX_MESSAGE_BYTES) throw new Error('Codex daemon message exceeds 8 MiB.');
-        if (fin) {
-          events.push({ type: 'text', text: Buffer.concat(this.#parts).toString('utf8') });
-          this.#parts = []; this.#partBytes = 0;
-        }
+      if (opcode !== 0x1 && opcode !== 0x0) throw new Error('Codex daemon sent an unsupported frame type.');
+      if (opcode === 0x0 && this.#parts.length === 0) throw new Error('Codex daemon sent an unexpected continuation frame.');
+      if (opcode === 0x1 && this.#parts.length > 0) throw new Error('Codex daemon started a new message before finishing the previous one.');
+      this.#parts.push(payload);
+      this.#partBytes += payload.length;
+      if (this.#partBytes > MAX_MESSAGE_BYTES) throw new Error('Codex daemon message exceeds 8 MiB.');
+      if (fin) {
+        events.push({ type: 'text', text: Buffer.concat(this.#parts).toString('utf8') });
+        this.#parts = []; this.#partBytes = 0;
       }
     }
   }

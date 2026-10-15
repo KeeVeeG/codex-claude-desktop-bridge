@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DaemonUnavailableError, TerminalNotLoadedError, openDaemon, queueToTerminalThread, readDaemonVersions } from '../lib/codex-daemon.mjs';
+import { DaemonUnavailableError, TerminalNotLoadedError, openDaemon, queueToTerminalThread, readDaemonVersions, scrubPaths } from '../lib/codex-daemon.mjs';
 import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,6 +37,42 @@ test('a missing Codex executable and the kill switch are reported as unavailable
     error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
   await assert.rejects(() => openDaemon({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: 'off' } }),
     error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
+});
+
+test('the kill switch accepts the usual spellings of off, and nothing else disables terminal support', async () => {
+  for (const value of ['OFF', ' off ', '0', 'false', 'No', 'disabled']) {
+    await assert.rejects(() => openDaemon({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: value } }),
+      error => error instanceof DaemonUnavailableError && /disabled/.test(error.message), JSON.stringify(value));
+    assert.equal(await readDaemonVersions({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: value } }), null);
+  }
+  for (const value of ['', 'on', 'offline']) {
+    await assert.rejects(() => openDaemon({ env: { CODEX_CLAUDE_BRIDGE_DAEMON: value, CODEX_CLAUDE_BRIDGE_CODEX_BIN: '', PATH: '' } }),
+      error => /not found/.test(error.message), JSON.stringify(value));
+  }
+});
+
+test('local paths are scrubbed in either slash style, through UNC, and through profile names with spaces', () => {
+  const cases = [
+    'cannot open C:\\Users\\Jane Doe\\.codex\\app.sock now',
+    'cannot open C:/Users/jane/.codex/app.sock now',
+    'cannot open D:\\work\\jane\\codex now',
+    'cannot open \\\\?\\C:\\Users\\Jane Doe\\.codex now',
+    'cannot open \\\\server\\share\\jane now',
+  ];
+  for (const text of cases) {
+    const scrubbed = scrubPaths(text);
+    assert.match(scrubbed, /^cannot open <path>/, text);
+    assert.equal(/jane|Doe|codex|work|server/i.test(scrubbed), false, `${text} -> ${scrubbed}`);
+  }
+  assert.equal(scrubPaths('thread not found: term-1'), 'thread not found: term-1');
+});
+
+test('a daemon error message is scrubbed for display but kept verbatim for classification', async t => {
+  const setup = await fakeDaemon(t, { threads: [], errors: { 'thread/list': { code: -32603, message: 'failed to read C:\\Users\\Jane Doe\\.codex\\sessions' } } });
+  const connection = await openDaemon({ ...setup.daemon });
+  t.after(() => connection.close());
+  await assert.rejects(() => connection.request('thread/list', {}), error =>
+    error.message === 'Codex daemon: failed to read <path>' && /Jane Doe/.test(error.rpcMessage));
 });
 
 test('the supplied environment reaches the proxy, so an isolated CODEX_HOME selects its own daemon', async t => {

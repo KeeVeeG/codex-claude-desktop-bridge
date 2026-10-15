@@ -44,15 +44,23 @@ test('masked client frames round-trip through the decoder at every length class'
 });
 
 test('decoder waits for the upgrade, reports open, and accepts bytes split across chunks', () => {
-  const decoder = new FrameDecoder();
-  const wire = Buffer.concat([Buffer.from(UPGRADED), serverFrame(1, '{"id":1}')]);
+  const { accept } = upgradeRequest();
+  const decoder = new FrameDecoder({ accept });
+  const head = `HTTP/1.1 101 Switching Protocols\r\nsec-websocket-accept: ${accept}\r\n\r\n`;
+  const wire = Buffer.concat([Buffer.from(head), serverFrame(1, '{"id":1}')]);
   const events = [];
   for (let offset = 0; offset < wire.length; offset += 7) events.push(...decoder.push(wire.subarray(offset, offset + 7)));
   assert.deepEqual(events, [{ type: 'open' }, { type: 'text', text: '{"id":1}' }]);
 });
 
 test('decoder rejects a refused upgrade', () => {
-  assert.throws(() => new FrameDecoder().push(Buffer.from('HTTP/1.1 403 Forbidden\r\n\r\n')), /refused the WebSocket upgrade/);
+  assert.throws(() => new FrameDecoder({ accept: upgradeRequest().accept }).push(Buffer.from('HTTP/1.1 403 Forbidden\r\n\r\n')),
+    /refused the WebSocket upgrade/);
+});
+
+test('a decoder that reads the upgrade cannot be built without the expected accept key', () => {
+  assert.throws(() => new FrameDecoder(), /accept key is required/);
+  assert.doesNotThrow(() => new FrameDecoder({ upgraded: true }));
 });
 
 test('fragmented text messages are reassembled and ping and close are reported', () => {
@@ -76,6 +84,31 @@ test('invalid frame sequences are rejected: binary, stray continuation, fragment
   assert.throws(() => fresh().push(serverFrame(0, 'orphan')), /unexpected continuation frame/);
   assert.throws(() => fresh().push(serverFrame(9, 'p', { fin: false })), /invalid control frame/);
   assert.throws(() => fresh().push(Buffer.concat([Buffer.from([0x89, 126, 0, 126]), Buffer.alloc(126)])), /invalid control frame/);
+});
+
+test('reserved bits, reserved opcodes, and a new message inside a fragmented one are rejected', () => {
+  const fresh = () => new FrameDecoder({ upgraded: true });
+  const reservedBit = serverFrame(1, 'hi');
+  reservedBit[0] |= 0x40;
+  assert.throws(() => fresh().push(reservedBit), /reserved bits/);
+  assert.throws(() => fresh().push(serverFrame(3, 'x')), /unsupported frame type/);
+  assert.throws(() => fresh().push(serverFrame(0xb, 'x')), /unsupported frame type/);
+  assert.throws(() => fresh().push(Buffer.concat([serverFrame(1, 'part', { fin: false }), serverFrame(1, 'fresh')])),
+    /new message before finishing/);
+});
+
+test('fragments survive an interleaved ping and a multibyte character split across them', () => {
+  const bytes = Buffer.from('é→');
+  const events = new FrameDecoder({ upgraded: true }).push(Buffer.concat([
+    serverFrame(1, bytes.subarray(0, 1), { fin: false }), serverFrame(9, 'p'), serverFrame(0, bytes.subarray(1)),
+  ]));
+  assert.deepEqual(events, [{ type: 'ping', payload: Buffer.from('p') }, { type: 'text', text: 'é→' }]);
+});
+
+test('an invalid frame keeps the events decoded before it in the same chunk', () => {
+  const wire = Buffer.concat([serverFrame(1, '{"id":1}'), serverFrame(2, 'bin')]);
+  assert.throws(() => new FrameDecoder({ upgraded: true }).push(wire), error =>
+    /unsupported binary frame/.test(error.message) && JSON.stringify(error.events) === JSON.stringify([{ type: 'text', text: '{"id":1}' }]));
 });
 
 test('pong and close frames are masked control frames', () => {

@@ -1,6 +1,6 @@
 # Codex terminal transport: design
 
-Status: implemented on branch feature/terminal-sessions, pending the live smoke test. Date: 2026-10-12.
+Status: implemented on branch feature/terminal-sessions; live smoke findings are recorded below. Date: 2026-10-12. Where this design and the code differ, the code and the README are authoritative: the host registry gained no `kind` field, terminal listing pages `thread/list` without `thread/loaded/list`, and fresh terminal sessions report `source: "cli"`, not `"vscode"`.
 
 ## Purpose
 

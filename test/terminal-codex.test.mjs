@@ -9,7 +9,9 @@ import test from 'node:test';
 import { canonicalClaudeSocket } from '../lib/claude-desktop.mjs';
 import { executeBridgeTool, shouldReportTerminalUnavailable } from '../lib/desktop-service.mjs';
 import { DaemonUnavailableError } from '../lib/codex-daemon.mjs';
+import { publishCodexHost } from '../lib/codex-host.mjs';
 import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
+import { encodeFrame, messageTool, mockPipe } from './native-helpers.mjs';
 
 const terminalMeta = threadId => ({ 'x-codex-turn-metadata': JSON.stringify({ thread_id: threadId }), threadId });
 
@@ -132,14 +134,71 @@ test('repeating a submitted message_id sends nothing new, and the same ID to ano
   assert.equal(setup.requests().filter(entry => entry.method === 'turn/start').length, 2);
 });
 
-test('a pre-aborted send makes no daemon write and leaves no accepted message', async t => {
+test('a pre-aborted send contacts no daemon and records no message', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: termId, message: 'x', message_id: 'm-abort' },
     { ...setup.context, signal: controller.signal }), error => error.name === 'AbortError');
-  assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+  assert.deepEqual(setup.requests(), []);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.some(message => message.id === 'm-abort'), false);
+});
+
+/** A registered Codex Desktop app that lists `threads` and accepts sends. */
+async function desktopApp(t, setup, threads) {
+  const listTool = { name: 'list_threads', namespace: 'codex_app', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } } } };
+  const sent = [];
+  const answer = (socket, id, result) => socket.write(encodeFrame({ jsonrpc: '2.0', id, result }));
+  const app = await mockPipe(t, { framed: true, onMessage(message, socket) {
+    if (message.method === 'tools/list') return answer(socket, message.id, { tools: [messageTool, listTool] });
+    if (message.params.tool === 'list_threads') {
+      const listing = { threads: threads.map(thread => ({ kind: 'codex', ...thread })) };
+      return answer(socket, message.id, { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(listing) }] });
+    }
+    sent.push(message.params);
+    answer(socket, message.id, { success: true, contentItems: [] });
+  } });
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: app.pipePath, threadId: 'desktop-context' });
+  return { sent: () => sent };
+}
+
+test('an ID the daemon knows as a Desktop thread is sent through the Desktop pipe, never the daemon', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: 'desk-a', originator: 'Codex Desktop' }, { id: 'term-a', originator: 'codex-tui' }] });
+  const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
+  const result = await executeBridgeTool('send_to_codex', { thread_id: 'desk-a', message: 'hi', message_id: 'm-desk' }, setup.context);
+  assert.equal(result.message.status, 'submitted');
+  assert.deepEqual(desktop.sent().map(params => params.arguments.threadId), ['desk-a']);
+  assert.ok(setup.requests().some(entry => entry.method === 'thread/read' && entry.params.threadId === 'desk-a'));
+  assert.equal(setup.requests().some(entry => entry.method === 'turn/start' || entry.method === 'turn/steer'), false);
+});
+
+test('a terminal Claude sender is named as a terminal session in a Desktop Codex notice', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
+  await executeBridgeTool('send_to_codex', { thread_id: 'desk-a', message: 'hi', message_id: 'm-label' }, setup.context);
+  assert.match(desktop.sent()[0].arguments.prompt, /^\[From Claude Code terminal session "[0-9a-f-]+"; bridge message "m-label"\]/);
+});
+
+test('listing merges both sources, and a terminal entry replaces a Desktop entry with the same ID', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: 'shared', originator: 'codex-tui', name: 'Shared' },
+    { id: 'desk-a', originator: 'Codex Desktop' }, { id: 'term-b', originator: 'codex-tui', name: 'Terminal B' }] });
+  await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }, { id: 'shared', title: 'Shared in Desktop' }]);
+  const result = await executeBridgeTool('list_codex_chats', {}, setup.context);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.chats.map(chat => [chat.thread_id, chat.source]), [['desk-a', 'desktop'], ['shared', 'terminal'], ['term-b', 'terminal']]);
+});
+
+test('a running daemon that does not answer the routing check refuses the send instead of guessing Desktop', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [{ id: 'term-a', originator: 'codex-tui' }], silent: 'thread/read' });
+  const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
+  const context = { ...setup.context, daemon: { ...setup.daemon, timeoutMs: 1500 } };
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'term-a', message: 'hi', message_id: 'm-wedged' }, context),
+    /Could not check whether this Codex ID is a terminal session/);
+  assert.deepEqual(desktop.sent(), []);
+  const status = await executeBridgeTool('bridge_status', {}, setup.context);
+  assert.equal(status.messages.some(message => message.id === 'm-wedged'), false);
 });
 
 test('a terminal Codex caller can send to a Claude session and the notice names its source', async t => {

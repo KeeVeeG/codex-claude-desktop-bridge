@@ -22,11 +22,28 @@ const CMD_SHIM_MESSAGE = 'CODEX_CLAUDE_BRIDGE_CODEX_BIN must point to codex.exe,
 // Node cannot spawn a .cmd/.bat shim without a shell, and this module never uses one.
 const isDirectExecutable = executable => /\.exe$/i.test(executable);
 
+// Accept the usual spellings of "off", so an opt-out is never silently ignored.
+const DISABLED = /^(off|0|false|no|disabled?)$/i;
+const disabledValue = env => {
+  const value = String(env.CODEX_CLAUDE_BRIDGE_DAEMON ?? '').trim();
+  return DISABLED.test(value) ? value : null;
+};
+
+/** Replace local paths, which can carry user names, before text reaches a model or the ledger. */
+export function scrubPaths(text) {
+  return String(text)
+    // A profile directory can contain spaces, so a path through one is removed through its last segment.
+    .replace(/[A-Za-z]:[\\/]+(?:Users|Documents and Settings)[\\/]+[^\\/\r\n'")]+(?:[\\/][^\s'")]*)?/gi, '<path>')
+    .replace(/[A-Za-z]:[\\/][^\s'")]*/g, '<path>')
+    .replace(/\\\\[^\s'")]+/g, '<path>');
+}
+
 // The injected command (tests) skips the kill switch and the .exe check.
 function resolveExecutable({ effective, command }) {
   if (command) return command;
-  if (effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') {
-    throw new DaemonUnavailableError('Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=off.');
+  const disabled = disabledValue(effective);
+  if (disabled !== null) {
+    throw new DaemonUnavailableError(`Codex terminal support is disabled by CODEX_CLAUDE_BRIDGE_DAEMON=${disabled}.`);
   }
   const executable = resolveCodexExecutable({ env: effective });
   if (!executable) {
@@ -127,7 +144,8 @@ export function openDaemon({ env = process.env, command, args, signal, timeoutMs
       waiting.delete(message.id);
       if (message.error) {
         const rpcMessage = String(message.error.message ?? 'request rejected');
-        entry.reject(Object.assign(new Error(`Codex daemon: ${rpcMessage}`), { rpcCode: message.error.code, rpcMessage }));
+        // rpcMessage stays verbatim for classification; only the visible message is scrubbed.
+        entry.reject(Object.assign(new Error(`Codex daemon: ${scrubPaths(rpcMessage)}`), { rpcCode: message.error.code, rpcMessage }));
       } else entry.resolve(message.result);
     }
 
@@ -156,20 +174,24 @@ export function openDaemon({ env = process.env, command, args, signal, timeoutMs
     child.stdout.on('error', () => fail(new Error('The Codex daemon connection failed.')));
     child.stderr.on('error', () => fail(new Error('The Codex daemon connection failed.')));
     child.on('close', () => {
-      const cleaned = stderr.trim().replace(/[A-Za-z]:\\[^\s'")]+/g, '<path>').replace(/\\\\[^\s'")]+/g, '<path>');
+      const cleaned = scrubPaths(stderr.trim());
       const hint = cleaned ? ` (${cleaned.slice(0, 200)})` : '';
       fail(opened ? new Error('The Codex daemon connection closed unexpectedly.')
         : new DaemonUnavailableError(`The Codex daemon is not reachable${hint}. The bridge never starts the daemon.`));
     });
     child.stdout.on('data', chunk => {
       let events;
-      try { events = decoder.push(chunk); } catch (error) { fail(error); return; }
+      let invalid = null;
+      // Frames decoded before an invalid one in the same chunk are still handled, so a response
+      // that arrived intact is not downgraded to an uncertain outcome.
+      try { events = decoder.push(chunk); } catch (error) { events = error.events ?? []; invalid = error; }
       for (const event of events) {
         if (event.type === 'open') afterUpgrade();
         else if (event.type === 'text') handle(event.text);
         else if (event.type === 'ping') { try { write(encodePong(event.payload)); } catch { /* closing */ } }
         else if (event.type === 'close') fail(new Error('The Codex daemon closed the connection.'));
       }
+      if (invalid) fail(invalid);
     });
     write(Buffer.from(upgrade.text, 'latin1'));
   });
@@ -195,11 +217,13 @@ const summarize = thread => ({
 
 export const isTerminalThread = thread => thread?.originator === TERMINAL_ORIGINATOR;
 
-export async function listTerminalThreads(connection, { limit = 30, signal, timeoutMs } = {}) {
+export async function listTerminalThreads(connection, { limit = 30, signal, timeoutMs, budgetMs = 5000 } = {}) {
   const found = [];
   let cursor = null;
-  // Bounded: 40 pages of 50 stored threads. An exact thread ID is still resolved by thread/read.
-  for (let page = 0; page < 40 && found.length < limit; page++) {
+  const until = Date.now() + budgetMs;
+  // Bounded: at most 40 pages of 50 stored threads, and no new page once the time budget is spent,
+  // so a store full of Desktop threads cannot stall every listing. An exact ID is still resolved by thread/read.
+  for (let page = 0; page < 40 && found.length < limit && (page === 0 || Date.now() < until); page++) {
     const result = await connection.request('thread/list', { limit: 50, ...(cursor ? { cursor } : {}) }, { signal, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
     for (const thread of result?.data ?? []) if (isTerminalThread(thread)) found.push(summarize(thread));
     cursor = result?.nextCursor ?? null;
@@ -350,7 +374,7 @@ export function queueToTerminalThread({ threadId, text, env = process.env, signa
 /** Read the CLI and daemon versions without starting anything (`codex app-server daemon version`). */
 export function readDaemonVersions({ env = process.env, command, args, timeoutMs = 5000 } = {}) {
   const effective = { ...process.env, ...env };
-  if (!command && effective.CODEX_CLAUDE_BRIDGE_DAEMON === 'off') return Promise.resolve(null);
+  if (!command && disabledValue(effective) !== null) return Promise.resolve(null);
   const executable = command ?? resolveCodexExecutable({ env: effective });
   if (!executable) return Promise.resolve(null);
   if (!command && !isDirectExecutable(executable)) return Promise.resolve(null);
