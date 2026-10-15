@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { defaultStateDir, withStateLock } from '../lib/store.mjs';
+import { validateSshHostAlias } from '../lib/codex-ssh.mjs';
 import { PLUGIN_NAME, COMMON_RUNTIME_FILES, NATIVE_RUNTIME_FILES, checkManifests, compatibilityFiles } from './manifests.mjs';
 
 export { PLUGIN_NAME };
@@ -187,6 +188,8 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
   if (!codex && !claude) throw new Error('Select Codex, Claude, or both.');
   const root = fs.realpathSync(sourceRoot);
   const bundle = checkManifests(root, { checkNative: false });
+  const sshAlias = env.CODEX_CLAUDE_BRIDGE_SSH_HOST === undefined ? undefined
+    : validateSshHostAlias(env.CODEX_CLAUDE_BRIDGE_SSH_HOST);
   const pluginsDir = path.resolve(homeDir, 'plugins');
   const destination = path.join(pluginsDir, PLUGIN_NAME);
   const stateDir = path.resolve(defaultStateDir({ homeDir, env }));
@@ -201,6 +204,7 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
   // Preserve the shared home-profile state despite application-specific MSIX
   // environments. Regenerate both native adapters from this pinned source.
   portableServer.env = { ...(portableServer.env ?? {}), CODEX_CLAUDE_BRIDGE_STATE_DIR: stateDir };
+  if (sshAlias !== undefined) portableServer.env.CODEX_CLAUDE_BRIDGE_SSH_HOST = sshAlias;
   const sources = COMMON_RUNTIME_FILES.map(relative => ({ relative, filename: checkedSource(root, relative) }));
   refuseLink(pluginsDir);
   refuseLink(destination);
@@ -237,7 +241,7 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
     fs.writeFileSync(path.join(temporary, '.claude-plugin', 'marketplace.json'), jsonText({
       name: CLAUDE_MARKETPLACE,
       owner: { name: publisherName },
-      plugins: [{ name: PLUGIN_NAME, source: './', description: 'Asynchronous native messages between Codex Desktop tasks and Claude Desktop Code sessions.' }],
+      plugins: [{ name: PLUGIN_NAME, source: './', description: 'Asynchronous native messages between Codex and Claude Code, in Desktop or a terminal.' }],
     }));
     if (fs.existsSync(destination)) {
       backupDirectory = path.join(pluginsDir, `.${PLUGIN_NAME}.backup-${build}-${randomUUID()}`);
@@ -373,7 +377,9 @@ export async function main(args = process.argv.slice(2)) {
       pipePath: process.env.CODEX_APP_TOOLS_PIPE_PATH, threadId: process.env.CODEX_THREAD_ID });
     console.log('Registered this Codex Desktop host for local conversation discovery.');
   }
-  console.log(`Fully quit and reopen Claude Desktop when convenient so its MCP process loads this version. In Codex, start a new task or restart the app to load updated tools. Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
+  if (prepared.claude) console.log('In Claude CLI, run /reload-plugins and check /mcp. If old tools remain, exit and resume the exact conversation with claude --resume <session_id>. In Claude Desktop, fully quit and reopen the app when convenient so its MCP process loads this version.');
+  if (prepared.codex) console.log('In Codex Desktop, start a new task or restart the app to load updated tools. Restart terminal Codex sessions when convenient to load updated tools.');
+  console.log(`Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
   return prepared;
 }
 

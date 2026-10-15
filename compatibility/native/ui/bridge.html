@@ -303,6 +303,9 @@
     if (!state.selected && typeof data.selected_session_id === 'string' && state.chats.some(chat => chat.session_id === data.selected_session_id)) select(data.selected_session_id);
     renderChats(); renderConversation({ preserveTimeline: true });
   }
+  function clientLabel(chat) {
+    return chat.entrypoint === 'cli' ? 'Claude CLI' : chat.entrypoint === 'sdk-cli' ? 'Claude CLI (print)' : chat.entrypoint === 'claude-desktop' ? 'Claude Desktop' : 'Claude Code';
+  }
   function renderChats() {
     const active = document.activeElement;
     const activeId = active?.id || '';
@@ -317,18 +320,18 @@
     $('tab-contacted').tabIndex = state.tab === 'contacted' ? 0 : -1; $('tab-all').tabIndex = state.tab === 'all' ? 0 : -1;
     const nodes = chats.map(chat => {
       const button = element('button', 'chat'); button.type = 'button'; button.dataset.sessionId = chat.session_id;
-      button.setAttribute('aria-current', String(state.selected === chat.session_id)); button.setAttribute('aria-label', `${chat.title}${chat.live ? '' : ', inactive chat'}`);
+      button.setAttribute('aria-current', String(state.selected === chat.session_id)); button.setAttribute('aria-label', `${chat.title}, ${clientLabel(chat)}${chat.live ? '' : ', inactive chat'}`);
       const info = element('span', 'chat-info'); const top = element('span', 'chat-top');
       top.append(element('span', 'chat-title', chat.title));
       const activity = timestamp(chat.last_activity_at || chat.last_contact_at);
       if (activity) top.append(element('span', 'chat-time', new Date(activity).toDateString() === new Date().toDateString() ? shortTime(activity) : shortDate(activity)));
-      info.append(top, element('span', 'chat-cwd', `${workspace(chat.cwd) || 'Claude Desktop Code'} · ${chat.live ? 'Open' : 'Archived'}`));
+      info.append(top, element('span', 'chat-cwd', `${clientLabel(chat)}${workspace(chat.cwd) ? ` · ${workspace(chat.cwd)}` : ''} · ${chat.live ? 'Open' : 'Archived'}`));
       button.append(info); button.addEventListener('click', () => select(chat.session_id)); return button;
     });
     if (!nodes.length) {
       const empty = element('div', 'list-empty');
       empty.append(element('strong', '', state.ready ? (query ? 'No results' : state.tab === 'contacted' ? 'No conversations yet' : 'No chats available') : 'Loading chats…'),
-        element('span', '', query ? 'Try another name or project.' : state.tab === 'contacted' ? 'Open All chats to start a conversation.' : 'Open a Code session in Claude Desktop and refresh the list.'));
+        element('span', '', query ? 'Try another name or project.' : state.tab === 'contacted' ? 'Open All chats to start a conversation.' : 'Open a Claude Code session in Desktop or the Windows CLI and refresh the list.'));
       nodes.push(empty);
     }
     $('chat-list').replaceChildren(...nodes);
@@ -355,7 +358,7 @@
     $('welcome').hidden = Boolean(chat); $('conversation-head').hidden = !chat; $('timeline').hidden = !chat; $('composer-wrap').hidden = !chat;
     if (!chat) { $('conversation-alert').hidden = true; return; }
     $('conversation-title').textContent = chat.title;
-    $('conversation-subtitle').textContent = `${chat.live ? 'Session active' : 'Session inactive'}${workspace(chat.cwd) ? ` · ${workspace(chat.cwd)}` : ''}`;
+    $('conversation-subtitle').textContent = `${clientLabel(chat)} · ${chat.live ? 'Session active' : 'Session inactive'}${workspace(chat.cwd) ? ` · ${workspace(chat.cwd)}` : ''}`;
     renderTimeline({ preserve: preserveTimeline }); renderComposer(); renderAlert();
   }
   function statusText(message) {
@@ -413,7 +416,7 @@
     $('composer').hidden = !chat.live || uncertain; $('composer-inactive').hidden = chat.live && !uncertain;
     $('inactive-title').textContent = uncertain ? 'Delivery not confirmed' : 'This Claude session is inactive';
     $('inactive-detail').textContent = uncertain ? 'The text and message ID were saved. Check the selected Claude chat and refresh history. Resending is blocked.'
-      : 'History is available. To send a new message, open the relevant Code session in Claude Desktop and refresh the list.';
+      : 'History is available. To send a new message, open this Claude Code session in Desktop or the Windows CLI and refresh the list.';
     const value = state.drafts.get(chat.session_id) || ''; const bytes = new TextEncoder().encode(value).length;
     const sending = pending?.outcome === 'sending';
     $('message').disabled = !state.ready || sending;

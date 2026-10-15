@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { createSession, processAlive, readSession, updateSession } from '../lib/store.mjs';
+import { createSession, processAlive, readSession, updateSession, readMacProcessStart, macLockOwnerAlive } from '../lib/store.mjs';
 import { nativeFixture as fixture } from './native-helpers.mjs';
 
 const storeUrl = new URL('../lib/store.mjs', import.meta.url).href;
@@ -145,6 +145,86 @@ test('a reused live PID does not keep a lock owned by an earlier process',
     updateSession(session, state => { state.recovered = true; });
     assert.equal(readSession(session).recovered, true);
     assert.equal(fs.existsSync(lock), false);
+  });
+
+test('macOS process creation probes use a fixed executable, locale, timezone, and bounded output', () => {
+  const launches = [];
+  const token = readMacProcessStart(123, { spawnImpl: (...args) => {
+    launches.push(args);
+    return { status: 0, stdout: 'Thu Oct 15 07:08:09 2026\n' };
+  } });
+  assert.equal(token, '2026-10-15T07:08:09.000Z');
+  assert.equal(launches[0][0], '/bin/ps');
+  assert.deepEqual(launches[0][1], ['-p', '123', '-o', 'lstart=']);
+  assert.equal(launches[0][2].env.LC_ALL, 'C');
+  assert.equal(launches[0][2].env.TZ, 'UTC');
+  assert.equal(launches[0][2].timeout, 1000);
+  assert.equal(launches[0][2].maxBuffer, 16384);
+  assert.equal(readMacProcessStart(123, { spawnImpl: () => ({ status: 0, stdout: '  Wed Jan  7 07:08:09 2026\n' }) }),
+    '2026-01-07T07:08:09.000Z');
+  for (const result of [
+    { status: 1, stdout: 'Thu Oct 15 07:08:09 2026' },
+    { status: 0, error: new Error('Timed out'), stdout: 'Thu Oct 15 07:08:09 2026' },
+    { status: 0, stdout: '' }, { status: 0, stdout: 'jeu. oct. 15 07:08:09 2026' },
+    { status: 0, stdout: 'Thu Oct 15 07:08:09 2026\nThu Oct 15 07:08:10 2026' },
+    { status: 0, stdout: 'Thu Oct 15 99:08:09 2026' }, { status: 0, stdout: 123 },
+  ]) assert.equal(readMacProcessStart(123, { spawnImpl: () => result }), null);
+  assert.equal(readMacProcessStart(123, { spawnImpl: () => { throw new Error('spawn failed'); } }), null);
+  for (const pid of [0, -1, '123', 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(readMacProcessStart(pid, { spawnImpl: () => assert.fail('Invalid PID must not spawn') }), null);
+  }
+});
+
+test('macOS lock identity distinguishes PID reuse and conservatively retains an unverified live owner', () => {
+  const oldStart = '2026-10-14T07:08:09.000Z';
+  const newStart = '2026-10-15T07:08:09.000Z';
+  const owner = { pid: 123, procStartUtc: oldStart, createdAt: Date.parse(oldStart) + 10000 };
+  const options = { isAlive: () => true, readStart: () => oldStart };
+  assert.equal(macLockOwnerAlive(owner, options), true);
+  assert.equal(macLockOwnerAlive(owner, { ...options, readStart: () => newStart }), false);
+  for (const actual of [null, undefined, '', 'unknown', '2026-02-31T07:08:09.000Z']) {
+    assert.equal(macLockOwnerAlive(owner, { ...options, readStart: () => actual }), true);
+  }
+  assert.equal(macLockOwnerAlive(owner, { ...options, readStart: () => { throw new Error('Cannot inspect process'); } }), true);
+  assert.equal(macLockOwnerAlive({ ...owner, procStartUtc: 'malformed' }, { ...options, readStart: () => newStart }), true);
+  assert.equal(macLockOwnerAlive(owner, { isAlive: () => false, readStart: () => assert.fail('Dead PID needs no probe') }), false);
+  assert.equal(macLockOwnerAlive({ pid: 0 }, { isAlive: () => assert.fail('Invalid PID needs no probe') }), false);
+  let probes = 0;
+  const changing = { ...options, readStart: () => ++probes === 1 ? oldStart : newStart };
+  assert.equal(macLockOwnerAlive(owner, changing), true);
+  assert.equal(macLockOwnerAlive(owner, changing), false, 'foreign PID identity must be reprobed before stale recovery');
+});
+
+test('legacy macOS locks recover only when the live process verifiably started after lock creation', () => {
+  const started = '2026-10-15T07:08:09.000Z';
+  const startMs = Date.parse(started);
+  const options = { isAlive: () => true, readStart: () => started };
+  assert.equal(macLockOwnerAlive({ pid: 123, createdAt: startMs - 6000 }, options), false);
+  for (const createdAt of [startMs - 5000, startMs - 1000, startMs, startMs + 1000, undefined, null, 'earlier', -1]) {
+    assert.equal(macLockOwnerAlive({ pid: 123, createdAt }, options), true);
+  }
+  assert.equal(macLockOwnerAlive({ pid: 123, createdAt: startMs - 6000 }, { ...options, readStart: () => null }), true);
+});
+
+test('macOS locks persist actual creation identity and recover a prior incarnation of a live PID',
+  { skip: process.platform !== 'darwin' && 'Requires the native macOS ps creation-time probe.' }, async t => {
+    const setup = await fixture(t);
+    const session = createSession({ ...setup, threadId: 'mac-reused-pid' });
+    const lock = path.join(session.dir, 'state.lock');
+    const actual = readMacProcessStart(process.pid);
+    assert.match(actual, /^\d{4}-\d{2}-\d{2}T/);
+    for (const prior of [
+      { procStartUtc: '1970-01-01T00:00:00.000Z', createdAt: Date.now() - 2000 },
+      { createdAt: Date.parse(actual) - 6000 },
+    ]) {
+      fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'earlier-process', ...prior }));
+      updateSession(session, state => {
+        assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).procStartUtc, actual);
+        state.recovered = (state.recovered ?? 0) + 1;
+      });
+      assert.equal(fs.existsSync(lock), false);
+    }
+    assert.equal(readSession(session).recovered, 2);
   });
 
 test('transient Windows sharing errors retry linking and reading the main lock',
