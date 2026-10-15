@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { sendToCodex, listCodexChats } from '../lib/codex-desktop.mjs';
+import { runMcpServer } from '../scripts/mcp.mjs';
 import { sshFixture } from './ssh-helpers.mjs';
 
 const options = fixture => ({ sshHostAlias: 'codex-test-host', threadId: 'target-thread',
   message: 'Report with unicode ✅\nand a newline', spawnImpl: fixture.spawnImpl, timeoutMs: 1000 });
+const uncertaintyNotice = 'Delivery is uncertain; inspect the selected chat before retrying.';
+
+function assertUnknown(error) {
+  assert.equal(error.deliveryUnknown, true);
+  assert.equal(error.message.split(uncertaintyNotice).length, 2, 'Visible error states uncertainty exactly once');
+  return true;
+}
 
 test('SSH sends one turn to the loaded selected thread through the public proxy', async () => {
   const fixture = sshFixture();
@@ -120,9 +130,33 @@ test('SSH rejects option-like or shell-like host aliases before launching a proc
 for (const config of [{ dropTurn: true }, { rpcError: true }, { malformedTurn: true }]) {
   test(`SSH marks post-submit failure uncertain without retry: ${JSON.stringify(config)}`, async () => {
     const fixture = sshFixture(config);
-    await assert.rejects(sendToCodex(options(fixture)), e => e.deliveryUnknown === true);
+    await assert.rejects(sendToCodex(options(fixture)), assertUnknown);
     assert.equal(fixture.requests.filter(r => r.method === 'turn/start').length, 1);
     assert.equal(fixture.launches.length, 1);
+  });
+}
+
+for (const config of [{ dropTurn: true }, { rpcError: true }, { malformedTurn: true }]) {
+  test(`SSH uncertainty remains visible in the MCP tools/call response: ${JSON.stringify(config)}`, async t => {
+    const fixture = sshFixture(config);
+    const input = new PassThrough(), output = new PassThrough();
+    const done = runMcpServer({ input, output, env: {},
+      executor: (_name, _args, context) => sendToCodex({ ...options(fixture), signal: context.signal }) });
+    t.after(async () => { input.end(); await done; });
+    const reply = async message => {
+      const received = once(output, 'data', { signal: AbortSignal.timeout(2000) });
+      input.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+      return JSON.parse((await received)[0].toString());
+    };
+    await reply({ id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25',
+      capabilities: {}, clientInfo: { name: 'ssh-uncertainty-test', version: '1' } } });
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    const response = await reply({ id: 2, method: 'tools/call', params: { name: 'send_to_codex',
+      arguments: { thread_id: 'target-thread', message: 'hello' } } });
+    assert.equal(response.result.isError, true);
+    const visible = response.result.content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+    assert.equal(visible.split(uncertaintyNotice).length, 2);
+    assert.equal(fixture.requests.filter(request => request.method === 'turn/start').length, 1);
   });
 }
 
@@ -135,7 +169,10 @@ test('SSH cancellation before connection launches nothing', async () => {
 test('SSH cancellation after turn transmission is uncertain and is not resent', async () => {
   const controller = new AbortController();
   const fixture = sshFixture({ dropTurn: true, onTurn: () => controller.abort() });
-  await assert.rejects(sendToCodex({ ...options(fixture), signal: controller.signal }), e => e.name === 'AbortError' && e.deliveryUnknown === true);
+  await assert.rejects(sendToCodex({ ...options(fixture), signal: controller.signal }), error => {
+    assert.equal(error.name, 'AbortError');
+    return assertUnknown(error);
+  });
   assert.equal(fixture.requests.filter(r => r.method === 'turn/start').length, 1);
 });
 

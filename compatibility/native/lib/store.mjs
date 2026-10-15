@@ -9,6 +9,45 @@ const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const SENDING_STALE_MS = 60_000;
 const processStartCache = new Map();
+let ownMacProcessStartUtc;
+
+/** Read a stable, second-resolution creation token without locale/timezone drift. */
+export function readMacProcessStart(pid, { spawnImpl = spawnSync } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  let result;
+  try {
+    result = spawnImpl('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+      encoding: 'utf8', timeout: 1000, maxBuffer: 16384,
+      env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+    });
+  } catch { return null; }
+  if (result.error || result.status !== 0 || typeof result.stdout !== 'string') return null;
+  const value = result.stdout.trim();
+  if (!/^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) {1,2}\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value)) return null;
+  const started = Date.parse(`${value} UTC`);
+  return Number.isFinite(started) ? new Date(started).toISOString() : null;
+}
+
+function validMacStartToken(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/.test(value)) return false;
+  const started = Date.parse(value);
+  return Number.isFinite(started) && new Date(started).toISOString() === value;
+}
+
+/** A failed process probe never gives a contender permission to steal a live PID's lock. */
+export function macLockOwnerAlive(owner, { isAlive = processAlive, readStart = readMacProcessStart } = {}) {
+  if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || !isAlive(owner.pid)) return false;
+  let actual;
+  try { actual = readStart(owner.pid); } catch { return true; }
+  if (!validMacStartToken(actual)) return true;
+  if (Object.hasOwn(owner, 'procStartUtc')) {
+    return !validMacStartToken(owner.procStartUtc) || actual === owner.procStartUtc;
+  }
+  // Older locks have only their wall-clock creation time. Recover them only if
+  // this live process demonstrably started later; close timestamps stay ambiguous.
+  return !Number.isSafeInteger(owner.createdAt) || owner.createdAt < 0 ||
+    Date.parse(actual) <= owner.createdAt + 5000;
+}
 
 function windowsProcessStartFt(pid) {
   const now = Date.now();
@@ -26,10 +65,17 @@ function windowsProcessStartFt(pid) {
 function lockOwner(token) {
   const owner = { pid: process.pid, token, createdAt: Date.now() };
   if (process.platform === 'win32') owner.procStartMs = Math.round(performance.timeOrigin);
+  if (process.platform === 'darwin') {
+    // Only our own successful token is cached: this runtime cannot outlive its
+    // process. Foreign PID probes stay fresh during compare-before-unlink recovery.
+    ownMacProcessStartUtc ??= readMacProcessStart(process.pid);
+    if (ownMacProcessStartUtc) owner.procStartUtc = ownMacProcessStartUtc;
+  }
   return owner;
 }
 
 function lockOwnerAlive(owner) {
+  if (process.platform === 'darwin') return macLockOwnerAlive(owner);
   if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || !processAlive(owner.pid)) return false;
   const age = Date.now() - owner.createdAt;
   if (process.platform !== 'win32' || !Number.isSafeInteger(owner.procStartMs) ||

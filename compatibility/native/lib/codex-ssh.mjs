@@ -22,6 +22,15 @@ function cancellation() {
 
 function check(signal) { if (signal?.aborted) throw cancellation(); }
 
+const UNCERTAIN_NOTICE = 'Delivery is uncertain; inspect the selected chat before retrying.';
+
+function markUnknown(error) {
+  error.deliveryUnknown = true;
+  // MCP exposes error.message, so the text must preserve the delivery state too.
+  if (!error.message.includes(UNCERTAIN_NOTICE)) error.message += ` ${UNCERTAIN_NOTICE}`;
+  return error;
+}
+
 function text(value, name, limit = 65536) {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > limit) {
     throw new Error(`${name} must be nonempty bounded text.`);
@@ -144,7 +153,7 @@ class SshRpc {
         this.calls.delete(value.id);
         if (value.error || !Object.hasOwn(value, 'result')) {
           const error = new Error(`Codex SSH request rejected: ${String(value.error?.message || 'unsupported response').slice(0, 300)}`);
-          if (call.mutating && call.written) error.deliveryUnknown = true;
+          if (call.mutating && call.written) markUnknown(error);
           call.reject(error);
         } else call.resolve(value.result);
       }
@@ -171,7 +180,7 @@ class SshRpc {
     this.rejectReady(error);
     for (const call of this.calls.values()) {
       const failure = Object.assign(new Error(error.message), { name: error.name, code: error.code });
-      if (call.mutating && call.written) failure.deliveryUnknown = true;
+      if (call.mutating && call.written) markUnknown(failure);
       call.reject(failure);
     }
     this.calls.clear(); this.close();
@@ -245,7 +254,7 @@ export async function sendSshCodex(options = {}) {
     // could load a conversation closed after the read and hydrate its history.
     const result = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: message }] }, true);
     if (!object(result?.turn) || typeof result.turn.id !== 'string' || !result.turn.id) {
-      throw Object.assign(new Error('Codex SSH returned an unsupported send receipt. Inspect the chat before retrying.'), { deliveryUnknown: true });
+      throw markUnknown(new Error('Codex SSH returned an unsupported send receipt.'));
     }
     return { transport: 'ssh-app-server', turnId: result.turn.id, threadId };
   } finally { rpc.close(); }
