@@ -16,3 +16,5 @@ Thumbs.db
 .cache/
 .superpowers/
 .claude/settings.local.json
+# Hand-over notes from side sessions; they live outside the repo, this keeps a copy placed inside from being committed.
+side-session-notes/
