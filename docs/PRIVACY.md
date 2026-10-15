@@ -2,7 +2,7 @@
 
 ## Data flow
 
-The bridge lists conversation titles/identifiers so a sender can select a destination, then forwards explicitly submitted text to that Desktop conversation. The sender names an exact destination for each message; there is no exclusive pairing. Incoming messages include the verified sender's conversation ID so the recipient can reply. The bridge does not automatically copy entire conversation histories or read project-file contents. A message can itself contain code, paths, personal data, or other information its sender chooses to include.
+The bridge lists conversation titles/identifiers so a sender can select a destination, then forwards explicitly submitted text to that Codex Desktop or local Claude Code conversation (CLI or Desktop Code on native Windows). The sender names an exact destination for each message; there is no exclusive pairing. Incoming messages include the verified sender's conversation ID so the recipient can reply. The bridge does not automatically copy entire conversation histories or read project-file contents. A message can itself contain code, paths, personal data, or other information its sender chooses to include.
 
 The plugin communicates with local application endpoints. It provides no public HTTP service, analytics endpoint, or hosted message relay. After delivery, Codex or Claude processes the message through the user's existing application/account. Those applications and their providers can process and retain conversation content under their own account settings and policies. Local transport does not mean the receiving AI application operates offline.
 

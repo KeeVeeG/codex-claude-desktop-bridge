@@ -236,6 +236,7 @@ export async function listClaudeConversations({ registryDir, projectsDir = path.
     const prior = conversations.get(live.sessionId);
     conversations.set(live.sessionId, { session_id: live.sessionId,
       title: safeText(live.name) || prior?.title || '', cwd: safeText(live.cwd, 32768) || prior?.cwd || '', live: true,
+      entrypoint: live.entrypoint,
       last_activity_at: prior?.last_activity_at ?? null, last_contact_at: null });
   }
   for (const record of exchange.records) {

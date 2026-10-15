@@ -76,7 +76,7 @@ test('history pagination reaches every message once even when timestamps and IDs
   await assert.rejects(getBridgeConversation({ stateDir: fixture.stateDir, ownerThreadId: 'pagination-owner', sessionId, cursor: '../state.json' }), /Invalid conversation cursor/);
 });
 
-test('catalog indexes bounded native metadata, titles and live sessions without returning transcript text', async t => {
+for (const entrypoint of ['claude-desktop', 'cli', 'sdk-cli']) test(`catalog indexes ${entrypoint} live sessions and bounded native metadata without returning transcript text`, async t => {
   const fixture = await nativeFixture(t);
   const sessionId = randomUUID();
   const oldSession = randomUUID();
@@ -96,7 +96,7 @@ test('catalog indexes bounded native metadata, titles and live sessions without 
   const registryDir = path.join(fixture.root, 'sessions');
   fs.mkdirSync(registryDir);
   fs.writeFileSync(path.join(registryDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid,
-    sessionId, entrypoint: 'claude-desktop', procStart: '1', pidDomain: 'fixture',
+    sessionId, entrypoint, procStart: '1', pidDomain: 'fixture',
     messagingSocketPath: '\\\\.\\pipe\\fixture-history-session', cwd: fixture.cwd, name: 'Live reference conversation' }));
   const ownLedger = ledger(fixture, 'catalog-owner');
   message(ownLedger, { kind: 'codex', id: 'catalog-owner' }, { kind: 'claude', id: oldSession }, 'contact', 'Sent through bridge');
@@ -105,10 +105,12 @@ test('catalog indexes bounded native metadata, titles and live sessions without 
   const live = result.conversations.find(value => value.session_id === sessionId);
   assert.equal(live.title, 'Live reference conversation');
   assert.equal(live.live, true);
+  assert.equal(live.entrypoint, entrypoint);
   assert.equal(live.cwd, fixture.cwd);
   const old = result.conversations.find(value => value.session_id === oldSession);
   assert.equal(old.title, 'Archived native title');
   assert.equal(old.live, false);
+  assert.equal(old.entrypoint, undefined, 'historical metadata must not guess which Claude client ran the session');
   assert.equal(typeof old.last_contact_at, 'number');
   assert.doesNotMatch(JSON.stringify(result), /SECRET_NATIVE_TRANSCRIPT|Do not index subagent|Sent through bridge|senderPid|messagingSocketPath/);
   const filtered = await listClaudeConversations({ projectsDir, registryDir, stateDir: fixture.stateDir,

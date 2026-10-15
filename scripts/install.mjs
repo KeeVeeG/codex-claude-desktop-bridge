@@ -237,7 +237,7 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
     fs.writeFileSync(path.join(temporary, '.claude-plugin', 'marketplace.json'), jsonText({
       name: CLAUDE_MARKETPLACE,
       owner: { name: publisherName },
-      plugins: [{ name: PLUGIN_NAME, source: './', description: 'Asynchronous native messages between Codex Desktop tasks and Claude Desktop Code sessions.' }],
+      plugins: [{ name: PLUGIN_NAME, source: './', description: 'Asynchronous native messages between Codex Desktop tasks and Claude Code CLI or Desktop sessions.' }],
     }));
     if (fs.existsSync(destination)) {
       backupDirectory = path.join(pluginsDir, `.${PLUGIN_NAME}.backup-${build}-${randomUUID()}`);
@@ -373,7 +373,9 @@ export async function main(args = process.argv.slice(2)) {
       pipePath: process.env.CODEX_APP_TOOLS_PIPE_PATH, threadId: process.env.CODEX_THREAD_ID });
     console.log('Registered this Codex Desktop host for local conversation discovery.');
   }
-  console.log(`Fully quit and reopen Claude Desktop when convenient so its MCP process loads this version. In Codex, start a new task or restart the app to load updated tools. Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
+  if (prepared.claude) console.log('In Claude CLI, run /reload-plugins and check /mcp. If old tools remain, exit and resume the exact conversation with claude --resume <session_id>. In Claude Desktop, fully quit and reopen the app when convenient so its MCP process loads this version.');
+  if (prepared.codex) console.log('In Codex, start a new task or restart the app to load updated tools.');
+  console.log(`Apps were not restarted.${prepared.claude ? ' Only the exact Claude send_to_codex tool received a user-level allow rule.' : ' Claude tool permissions were not changed.'}`);
   return prepared;
 }
 

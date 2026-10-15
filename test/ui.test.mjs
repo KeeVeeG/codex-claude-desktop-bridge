@@ -71,6 +71,28 @@ async function live(h = harness()) {
 }
 const record = (id, text, extra = {}) => ({ id, message: text, direction: 'to_claude', created_at: 1000, status: 'submitted', ...extra });
 
+test('panel distinguishes live CLI and Desktop recipients while preserving exact selected IDs', async () => {
+  const h = await live();
+  const chats = panel.chats.map(chat => ({ ...chat,
+    ...(chat.session_id === 'a' ? { entrypoint: 'cli' } : chat.session_id === 'b' ? { entrypoint: 'claude-desktop' }
+      : chat.session_id === 'd' ? { entrypoint: 'sdk-cli' } : {}) }));
+  h.emit({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { ...panel, chats } } });
+  await flush();
+  const cli = h.node('chat-list').children.find(node => node.dataset.sessionId === 'a');
+  const desktop = h.node('chat-list').children.find(node => node.dataset.sessionId === 'b');
+  assert.match(cli.textContent, /Claude CLI/);
+  assert.match(cli.attributes['aria-label'], /Claude CLI/);
+  assert.match(desktop.textContent, /Claude Desktop/);
+  h.node('tab-all').dispatch('click'); await flush();
+  const print = h.node('chat-list').children.find(node => node.dataset.sessionId === 'd');
+  assert.match(print.textContent, /Claude CLI \(print\)/);
+  await h.choose('a');
+  assert.match(h.node('conversation-subtitle').textContent, /Claude CLI/);
+  h.node('message').value = 'CLI recipient message'; h.node('message').dispatch('input');
+  h.node('composer').dispatch('submit'); await flush();
+  assert.equal(h.requests('bridge_ui_send').at(-1).message.params.arguments.session_id, 'a');
+});
+
 test('panel negotiates the MCP Apps bridge and pins both parent source and origin', async () => {
   const h = harness(); const init = h.outgoing[0];
   assert.equal(init.message.method, 'ui/initialize'); assert.equal(init.origin, '*');

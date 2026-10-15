@@ -12,7 +12,7 @@ import { getMessages, getSession } from '../lib/store.mjs';
 import { publishCodexHost } from '../lib/codex-host.mjs';
 import { encodeFrame, mockPipe, nativeFixture, messageTool } from './native-helpers.mjs';
 
-const windowsOnly = { skip: process.platform !== 'win32' && 'Desktop registry fixtures require Windows named pipes.' };
+const windowsOnly = { skip: process.platform !== 'win32' && 'Claude registry fixtures require Windows named pipes.' };
 const processStart = process.platform === 'win32'
   ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `(Get-Process -Id ${process.pid}).StartTime.ToFileTimeUtc().ToString()`],
@@ -24,12 +24,12 @@ function answer(socket, id, result) {
   socket.write(encodeFrame({ jsonrpc: '2.0', id, result }));
 }
 
-async function claudeFixture(t, onMessage) {
+async function claudeFixture(t, onMessage, entrypoint = 'claude-desktop') {
   const fixture = await nativeFixture(t);
   const inbox = await mockPipe(t, { onMessage });
   const registryDir = path.join(fixture.root, 'claude-registry');
   fs.mkdirSync(registryDir);
-  const record = { pid: process.pid, sessionId: randomUUID(), entrypoint: 'claude-desktop',
+  const record = { pid: process.pid, sessionId: randomUUID(), entrypoint,
     procStart: processStart, pidDomain: `win32:${os.hostname().toLowerCase()}`,
     messagingSocketPath: inbox.pipePath, cwd: fixture.cwd, name: 'Fixture Code session' };
   const token = '1234567890abcdef'.repeat(2);
@@ -54,8 +54,8 @@ test('doctor reports missing configuration without registering a host or creatin
   assert.ok(result.checks.every(check => Object.keys(check).sort().join(',') === 'detail,name,status'));
 });
 
-test('doctor validates compatible local endpoints without sending model messages or persisting state', windowsOnly, async t => {
-  const fixture = await claudeFixture(t);
+for (const entrypoint of ['claude-desktop', 'cli', 'sdk-cli']) test(`doctor validates ${entrypoint} endpoints without sending model messages or persisting state`, windowsOnly, async t => {
+  const fixture = await claudeFixture(t, undefined, entrypoint);
   const codex = await mockPipe(t, { framed: true, onMessage(message, socket) {
     if (message.method === 'tools/list') answer(socket, message.id, { tools: [messageTool, listTool] });
     else {
@@ -97,9 +97,10 @@ test('doctor distinguishes malformed registries and unsupported native schemas s
   assert.equal(fs.readFileSync(path.join(fixture.stateDir, 'codex-host.json'), 'utf8'), '{private malformed registry');
 });
 
-test('doctor verifies a Claude caller without writing state', windowsOnly, async t => {
-  const fixture = await claudeFixture(t);
-  const result = await executeBridgeTool('bridge_doctor', {}, { env: { CLAUDE_CODE_MESSAGING_SOCKET: fixture.inbox.pipePath },
+for (const entrypoint of ['claude-desktop', 'cli', 'sdk-cli']) test(`doctor verifies a ${entrypoint} caller without writing state`, windowsOnly, async t => {
+  const fixture = await claudeFixture(t, undefined, entrypoint);
+  const result = await executeBridgeTool('bridge_doctor', {}, { env: { CLAUDE_CODE_MESSAGING_SOCKET: fixture.inbox.pipePath,
+    CLAUDE_CODE_SESSION_ID: randomUUID() },
     parentPid: process.pid, stateDir: fixture.stateDir, registryDir: fixture.registryDir });
   assert.equal(result.application, 'claude');
   assert.equal(result.checks.find(check => check.name === 'caller').status, 'pass');

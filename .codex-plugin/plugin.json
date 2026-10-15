@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-desktop-bridge",
   "version": "0.3.3",
-  "description": "Send native messages between Codex Desktop tasks and Claude Desktop Code sessions on Windows.",
+  "description": "Send native messages between Codex Desktop tasks and Claude Code CLI or Desktop Code sessions on Windows.",
   "author": {
     "name": "KeeVeeG",
     "url": "https://github.com/KeeVeeG"
@@ -38,8 +38,8 @@
   },
   "interface": {
     "displayName": "Codex–Claude Desktop Bridge",
-    "shortDescription": "Message Codex and Claude Desktop conversations.",
-    "longDescription": "Find local conversations and send text between Codex Desktop tasks and Claude Desktop Code sessions on Windows. Either application can start a conversation or reply.",
+    "shortDescription": "Message Codex and Claude Code conversations.",
+    "longDescription": "Find local conversations and send text between Codex Desktop tasks and Claude Code CLI or Desktop Code sessions on native Windows. Either side can start a conversation or reply.",
     "developerName": "KeeVeeG",
     "category": "Productivity",
     "capabilities": [
@@ -56,7 +56,7 @@
     "logoDark": "./assets/bridge-dark.svg",
     "defaultPrompt": [
       "Open the Claude conversation panel beside this Codex chat so I can search chats, read history, and send a message manually.",
-      "Find the Claude Desktop Code conversation I name and send it my message.",
+      "Find the Claude Code CLI or Desktop Code conversation I name and send it my message.",
       "Check the bridge status and recent outgoing deliveries."
     ]
   }

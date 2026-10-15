@@ -64,6 +64,7 @@ test('human manual send preserves full text and provenance and posts one context
   assert.match(received, /User sent from Codex Desktop task/);
   assert.ok(received.includes(setup.args.message));
   assert.match(received, /^<cross-session-message[\s\S]*<\/cross-session-message>$/);
+  assert.match(received, /^<cross-session-message\b[^>]* from-mode="bypass">/, 'manual sends must retain the issue #1 fix');
   assert.equal(setup.notices.length, 1);
   assert.equal(setup.notices[0].threadId, setup.owner);
   assert.equal(setup.notices[0].arguments.threadId, setup.owner);
@@ -214,7 +215,7 @@ test('manual and automatic messages cannot relabel or reuse one another sending 
   assert.equal(fixture.notices.length, 1);
 });
 
-test('one verified owner can manually send the same ID independently to two exact live Claude recipients', windowsOnly, async t => {
+test('one verified owner can manually send the same ID independently to exact Desktop and CLI recipients', windowsOnly, async t => {
   const fixture = await setup(t);
   const secondClaude = await mockPipe(t);
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', windowsHide: true });
@@ -227,7 +228,7 @@ test('one verified owner can manually send the same ID independently to two exac
   const pidDomain = `win32:${os.hostname().toLowerCase()}`;
   fs.writeFileSync(path.join(fixture.registryDir, `${child.pid}.json`), JSON.stringify({
     pid: child.pid, sessionId: secondSessionId, name: 'Second manual recipient', cwd: fixture.cwd,
-    entrypoint: 'claude-desktop', procStart: start, pidDomain, messagingSocketPath: secondClaude.pipePath,
+    entrypoint: 'cli', procStart: start, pidDomain, messagingSocketPath: secondClaude.pipePath,
   }));
   fs.writeFileSync(path.join(fixture.registryDir, `${child.pid}.${hash(secondClaude.pipePath.toLowerCase())}.key`),
     JSON.stringify({ peerToken: randomUUID().replaceAll('-', ''), procStartFt: start, pidDomain }));

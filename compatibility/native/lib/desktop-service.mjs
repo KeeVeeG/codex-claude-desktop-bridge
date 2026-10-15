@@ -143,7 +143,7 @@ async function bridgeDoctor(context, config) {
   const checks = [];
   const add = (name, status, detail) => checks.push({ name, status, detail });
   add('platform', process.platform === 'win32' ? 'pass' : 'fail',
-    process.platform === 'win32' ? 'Windows Desktop transports are supported.' : 'Native Desktop discovery requires Windows.');
+    process.platform === 'win32' ? 'Codex Desktop and Claude Code Desktop/CLI transports are supported on Windows.' : 'Native bridge discovery requires Windows.');
   checks.push({ name: 'state_directory', ...inspectStateDirectory(config.stateDir) });
   let application = config.env.CLAUDE_CODE_MESSAGING_SOCKET ? 'claude'
     : config.env.CODEX_APP_TOOLS_PIPE_PATH ? 'codex' : 'unknown';
@@ -151,13 +151,13 @@ async function bridgeDoctor(context, config) {
   try {
     who = identifyCaller(context, config);
     application = who.kind;
-    add('caller', 'pass', 'The calling Desktop conversation has a verified runtime identity.');
+    add('caller', 'pass', 'The calling conversation has a verified runtime identity.');
   } catch {
     add('caller', 'fail', application === 'unknown'
-      ? 'No Desktop caller identity is available. Run this tool from the intended Codex task or Claude Desktop Code session.'
+      ? 'No caller identity is available. Run this tool from the intended Codex Desktop task or Claude Code Desktop/CLI session.'
       : application === 'codex'
       ? 'This call has no valid Codex task context. Run the tool from an open Codex task with the bridge enabled.'
-      : 'The direct Claude parent session could not be verified. Open the bridge in the intended Desktop Code session.');
+      : 'The direct Claude parent session could not be verified. Open the bridge in the intended Claude Code Desktop/CLI session.');
   }
   checkCancellation(signal);
   let hosts = [];
@@ -216,8 +216,8 @@ async function bridgeDoctor(context, config) {
   try {
     sessions = discoverClaudeSessions({ registryDir: config.registryDir });
     add('claude_registry', sessions.length ? 'pass' : 'fail', sessions.length
-      ? 'Live Claude Desktop Code sessions are registered.'
-      : 'No live Claude Desktop Code session is registered. Open its Code tab and enable the bridge.');
+      ? 'Live Claude Code Desktop/CLI sessions are registered.'
+      : 'No live Claude Code Desktop/CLI session with an inbox is registered. Open the intended session and check its Peer address in /status.');
   } catch {
     add('claude_registry', 'fail', 'The Claude session registry is unreadable or invalid. Check Claude configuration and reopen its Code session.');
   }
@@ -241,7 +241,7 @@ async function bridgeDoctor(context, config) {
   add('claude_inbox', inboxAvailable ? 'pass' : claudeIncomplete ? 'warning' : 'fail', inboxAvailable
     ? 'A verified Claude inbox accepts local connections. This check sent no message.'
     : claudeIncomplete ? 'Some Claude inboxes were not checked within the diagnostic time budget. Availability is inconclusive.'
-    : 'No checked Claude inbox is available with a valid session key. Reopen the intended Desktop Code session.');
+    : 'No checked Claude inbox is available with a valid session key. Reopen the intended Claude Code Desktop/CLI session.');
   return { application, ready: acceptedContext && inboxAvailable && checks.every(check => check.status !== 'fail'), checks };
 }
 
@@ -280,7 +280,7 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
     const session = senderLedger(who, config);
     return { application: who.kind, sender_id: sender(who).id, state_directory: config.stateDir,
       messages: session ? getMessages(session, args.limit || 20, undefined, sender(who)) : [],
-      note: 'Submitted means handed to the app transport, not read by the other model. Replies are independent messages.' };
+      note: 'Submitted means handed to the app transport, not read by the other model. Claude inbound rules may hold or refuse a message. Replies are independent messages.' };
   }
   if (name !== 'send_to_claude' && name !== 'send_to_codex') throw new Error('Unknown bridge tool');
   if ((name === 'send_to_claude') !== (who.kind === 'codex')) throw new Error(`Use ${who.kind === 'codex' ? 'send_to_claude' : 'send_to_codex'} from this application.`);
@@ -312,7 +312,8 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
       const notice = `[${source} ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       receipt = await sendToClaude({ ...endpoint, message: notice, senderName: senderLabel(route.from.id), signal: context.signal });
     } else {
-      const notice = `[From Claude Desktop session ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
+      const client = who.endpoint.entrypoint === 'claude-desktop' ? 'Claude Desktop' : 'Claude Code CLI';
+      const notice = `[From ${client} session ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       await sendToCodex({ pipePath: host.pipePath, contextThreadId: host.threadId,
         threadId: route.to.id, message: notice, signal: context.signal });
     }

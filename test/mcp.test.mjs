@@ -15,12 +15,12 @@ const serverPath = fileURLToPath(new URL('../scripts/mcp.mjs', import.meta.url))
 const processStart = process.platform === 'win32'
   ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${process.pid}).StartTime.ToFileTimeUtc().ToString()`], { encoding: 'utf8', windowsHide: true }).stdout.trim()
   : String(Date.now());
-const windowsOnly = { skip: process.platform !== 'win32' && 'Native Desktop registry uses Windows process identity.' };
+const windowsOnly = { skip: process.platform !== 'win32' && 'Native Claude registry uses Windows process identity.' };
 const metadata = threadId => ({ 'x-codex-turn-metadata': { thread_id: threadId } });
 
 function startMcp(t, env = {}, { parentProxy = false } = {}) {
   const childEnv = { ...process.env };
-  for (const name of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_APP_TOOLS_PIPE_PATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete childEnv[name];
+  for (const name of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_APP_TOOLS_PIPE_PATH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete childEnv[name];
   Object.assign(childEnv, env);
   const args = parentProxy
     ? ['-e', 'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,[process.argv[1]],{stdio:"inherit",windowsHide:true}); child.on("exit",code=>process.exit(code??1));', serverPath]
@@ -193,15 +193,20 @@ test('MCP structured results match advertised schemas while text JSON remains co
     createdAt: 1, updatedAt: 2, senderPid: 123, status: 'submitted', fingerprint: 'a'.repeat(64),
     receipt: { status: 'written', messageId: 'native-id', acknowledged: false } };
   const values = {
-    list_claude_sessions: [{ sessionId: 'recipient', pid: 123, name: 'Claude', cwd: 'C:/project', status: 'idle',
-      version: '2.1.280', entrypoint: 'claude-desktop', hostSessionId: null, procStart: '123', pidDomain: 'win32:test' }],
+    list_claude_sessions: ['claude-desktop', 'cli', 'sdk-cli'].map((entrypoint, index) => ({ sessionId: `recipient-${index}`,
+      pid: 123 + index, name: 'Claude', cwd: 'C:/project', status: 'idle', version: '2.1.299', entrypoint,
+      hostSessionId: null, procStart: '123', pidDomain: 'win32:test' })),
     list_codex_chats: [{ thread_id: 'source', title: 'Codex', status: 'idle', host_id: 'local' }],
     send_to_claude: { message: record },
     send_to_codex: { message: { ...record, route: { from: route.to, to: route.from }, direction: 'to_codex' }, retransmitted: false },
     bridge_status: { application: 'codex', sender_id: 'source', state_directory: 'C:/state', messages: [record], note: 'Submitted.', plugin_version: 'test' },
     bridge_doctor: { application: 'unknown', ready: false, checks: [{ name: 'caller', status: 'fail', detail: 'No verified sender.' }], plugin_version: 'test' },
-    bridge_panel: { owner_thread_id: 'source', application: 'codex', chats: [{ session_id: 'recipient',
-      title: 'Claude', cwd: 'C:/project', live: true, last_activity_at: 2, last_contact_at: 1 }], warnings: [] },
+    bridge_panel: { owner_thread_id: 'source', application: 'codex', chats: [
+      ...['claude-desktop', 'cli', 'sdk-cli'].map((entrypoint, index) => ({ session_id: `recipient-${index}`, entrypoint,
+        title: 'Claude', cwd: 'C:/project', live: true, last_activity_at: 2, last_contact_at: 1 })),
+      { session_id: 'archived-recipient', title: 'Archived Claude', cwd: 'C:/project', live: false,
+        last_activity_at: 1, last_contact_at: 1 },
+    ], warnings: [] },
     bridge_ui_history: { session_id: 'recipient', messages: [{ id: record.id, direction: 'to_claude',
       message: record.message, created_at: 1, status: 'submitted', manual: true }], next_cursor: null, has_more: false, warnings: [] },
     bridge_ui_send: { message: { ...record, manual: true }, manual: true, notice_status: 'submitted' },
@@ -320,7 +325,7 @@ test('unknown, malformed, completed, and initialization cancellations do not can
   assert.ok(signals.every(signal => !signal.aborted));
 });
 
-async function setupMcp(t, { envThreadId, holdFirstNotification = false, rejectedContextIds = [] } = {}) {
+async function setupMcp(t, { envThreadId, entrypoint = 'claude-desktop', holdFirstNotification = false, rejectedContextIds = [] } = {}) {
   const fixture = await nativeFixture(t);
   const claude = await mockPipe(t);
   const notifications = [];
@@ -368,7 +373,7 @@ async function setupMcp(t, { envThreadId, holdFirstNotification = false, rejecte
   const sessionId = randomUUID();
   const token = randomUUID().replaceAll('-', '');
   const pidDomain = `win32:${os.hostname().toLowerCase()}`;
-  const record = { pid: process.pid, sessionId, name: 'Claude MCP test', cwd: fixture.cwd, entrypoint: 'claude-desktop', procStart: processStart, pidDomain, messagingSocketPath: claude.pipePath };
+  const record = { pid: process.pid, sessionId, name: 'Claude MCP test', cwd: fixture.cwd, entrypoint, procStart: processStart, pidDomain, messagingSocketPath: claude.pipePath };
   fs.writeFileSync(path.join(registryDir, `${process.pid}.json`), JSON.stringify(record));
   const keyHash = createHash('sha256').update(claude.pipePath.toLowerCase()).digest('hex');
   fs.writeFileSync(path.join(registryDir, `${process.pid}.${keyHash}.key`), JSON.stringify({ peerToken: token, procStartFt: processStart, pidDomain }));
@@ -378,6 +383,7 @@ async function setupMcp(t, { envThreadId, holdFirstNotification = false, rejecte
     CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir,
     CODEX_CLAUDE_BRIDGE_REGISTRY_DIR: registryDir,
     CODEX_APP_TOOLS_PIPE_PATH: codex.pipePath,
+    CLAUDE_CONFIG_DIR: path.join(fixture.root, 'claude-config'),
     ...(envThreadId ? { CODEX_THREAD_ID: envThreadId } : {}),
   };
   const client = startMcp(t, env, { parentProxy: true });
@@ -390,11 +396,11 @@ function claudeEnv(setup) {
   return { CODEX_CLAUDE_BRIDGE_STATE_DIR: setup.stateDir, CODEX_CLAUDE_BRIDGE_REGISTRY_DIR: setup.registryDir };
 }
 
-function registerClaudeParent(setup, parentPid, socketPath) {
+function registerClaudeParent(setup, parentPid, socketPath, entrypoint = 'claude-desktop') {
   const procStart = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${parentPid}).StartTime.ToFileTimeUtc().ToString()`], { encoding: 'utf8', windowsHide: true }).stdout.trim();
   const sessionId = randomUUID();
   const pidDomain = `win32:${os.hostname().toLowerCase()}`;
-  const record = { pid: parentPid, sessionId, name: 'Different Claude MCP parent', cwd: setup.cwd, entrypoint: 'claude-desktop', procStart, pidDomain, messagingSocketPath: socketPath };
+  const record = { pid: parentPid, sessionId, name: 'Different Claude MCP parent', cwd: setup.cwd, entrypoint, procStart, pidDomain, messagingSocketPath: socketPath };
   fs.writeFileSync(path.join(setup.registryDir, `${parentPid}.json`), JSON.stringify(record));
   const keyHash = createHash('sha256').update(socketPath.toLowerCase()).digest('hex');
   fs.writeFileSync(path.join(setup.registryDir, `${parentPid}.${keyHash}.key`), JSON.stringify({ peerToken: randomUUID().replaceAll('-', ''), procStartFt: procStart, pidDomain }));
@@ -496,11 +502,12 @@ test('Claude ignores inherited Codex routing variables and does not replace its 
   assert.equal(toolValue(await callTool(peerWithoutSocket, 'bridge_status')).application, 'claude');
 });
 
-test('Codex and Claude can initiate independent addressed messages without a connection or reply', windowsOnly, async t => {
-  const setup = await setupMcp(t, { envThreadId: 'environment-fallback' });
+for (const entrypoint of ['cli', 'sdk-cli']) test(`Codex and Claude ${entrypoint} can initiate independent addressed messages without a connection or reply`, windowsOnly, async t => {
+  const setup = await setupMcp(t, { envThreadId: 'environment-fallback', entrypoint });
   const meta = metadata('origin-mcp-chat');
   const listed = toolValue(await callTool(setup.client, 'list_claude_sessions'));
   assert.match(JSON.stringify(listed), new RegExp(setup.sessionId));
+  assert.equal(listed.find(session => session.sessionId === setup.sessionId).entrypoint, entrypoint);
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(setup.token));
   const plainMessage = 'For information: the first part is ready. No reply needed. 🦊\n{"branch":"feature/unicode","custom":{"revision":7}}';
   toolValue(await callTool(setup.client, 'send_to_claude', { session_id: setup.sessionId, message: plainMessage, message_id: 'info-one' }, meta));
@@ -510,17 +517,21 @@ test('Codex and Claude can initiate independent addressed messages without a con
   assert.ok(deliveries[0].message.message.content.includes(plainMessage));
   assert.match(deliveries[0].message.message.content, /From Codex Desktop task "origin-mcp-chat"; bridge message "info-one"\]/);
   assert.doesNotMatch(deliveries[0].message.message.content, /connection_token|reply_token|ack_codex_request|PowerShell syntax|Deadline:/);
-  const peer = startMcp(t, claudeEnv(setup));
+  const staleSessionId = randomUUID();
+  const peer = startMcp(t, { ...claudeEnv(setup), CLAUDE_CODE_SESSION_ID: staleSessionId });
   await initialize(peer);
   const independent = 'Independent Claude note.\n{"kind":"observation","custom":["α","β"]}';
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: independent, message_id: 'claude-info-one' }));
   toolValue(await callTool(peer, 'send_to_codex', { thread_id: 'origin-mcp-chat', message: 'Another independent update.', message_id: 'claude-info-two' }));
   assert.equal(setup.notifications.length, 2);
   assert.ok(setup.notifications[0].arguments.prompt.includes(independent));
-  assert.match(setup.notifications[0].arguments.prompt, new RegExp(setup.sessionId));
+  assert.equal(setup.notifications[0].arguments.prompt,
+    `[From Claude Code CLI session "${setup.sessionId}"; bridge message "claude-info-one"]\n\n${independent}`);
   for (const call of setup.notifications) assert.equal(call.arguments.threadId, 'origin-mcp-chat');
   const codexStatus = toolValue(await callTool(setup.client, 'bridge_status', { limit: 10 }, meta));
   const claudeStatus = toolValue(await callTool(peer, 'bridge_status', { limit: 10 }));
+  assert.equal(claudeStatus.application, 'claude');
+  assert.equal(claudeStatus.sender_id, setup.sessionId);
   assert.match(JSON.stringify(codexStatus), /first part is ready/);
   assert.doesNotMatch(JSON.stringify(codexStatus), /Independent Claude note/);
   assert.match(JSON.stringify(claudeStatus), /Independent Claude note/);
@@ -528,8 +539,48 @@ test('Codex and Claude can initiate independent addressed messages without a con
   assert.ok(codexStatus.messages.every(message => message.route.from.kind === 'codex' && message.route.from.id === 'origin-mcp-chat'));
   assert.ok(claudeStatus.messages.every(message => message.route.from.kind === 'claude' && message.route.from.id === setup.sessionId));
   assert.equal(getSession({ stateDir: setup.stateDir, threadId: 'environment-fallback' }), null);
+  assert.equal(getSession({ stateDir: setup.stateDir, threadId: `claude:${staleSessionId}` }), null);
+  for (const [client, args, application] of [[setup.client, meta, 'codex'], [peer, undefined, 'claude']]) {
+    const doctor = toolValue(await callTool(client, 'bridge_doctor', {}, args));
+    assert.equal(doctor.application, application);
+    assert.equal(doctor.ready, true);
+    assert.equal(doctor.checks.find(check => check.name === 'claude_inbox').status, 'pass');
+  }
   const visible = JSON.stringify([...setup.client.messages, ...peer.messages]) + setup.client.stderr() + peer.stderr();
   assert.doesNotMatch(visible, new RegExp(setup.token));
+});
+
+for (const entrypoint of ['cli', 'sdk-cli']) test(`the MCP panel lists a ${entrypoint} recipient and sends a manual message with exact owner notice and history`, windowsOnly, async t => {
+  const setup = await setupMcp(t, { entrypoint });
+  const owner = 'cli-panel-owner';
+  const meta = metadata(owner);
+  const panel = toolValue(await callTool(setup.client, 'bridge_panel', {}, meta));
+  assert.equal(panel.owner_thread_id, owner);
+  assert.equal(panel.application, 'codex');
+  assert.deepEqual(panel.chats.map(chat => [chat.session_id, chat.entrypoint, chat.live]), [[setup.sessionId, entrypoint, true]]);
+  assert.equal(setup.notifications.length, 0, 'opening the panel must not send anything');
+  const args = { session_id: setup.sessionId, message: 'CLI manual message. 🦊\nFull second line.', message_id: 'cli-panel-manual' };
+  const sent = toolValue(await callTool(setup.client, 'bridge_ui_send', args, meta));
+  assert.equal(sent.message.status, 'submitted');
+  assert.equal(sent.manual, true);
+  assert.equal(sent.notice_status, 'submitted');
+  const deliveries = setup.claude.messages.filter(entry => entry.message.type === 'user');
+  assert.equal(deliveries.length, 1);
+  assert.ok(deliveries[0].message.message.content.includes(
+    `[User sent from Codex Desktop task "${owner}"; bridge message "${args.message_id}"]\n\n${args.message}`));
+  assert.equal(setup.notifications.length, 1);
+  assert.equal(setup.notifications[0].arguments.threadId, owner);
+  assert.equal(setup.notifications[0].arguments.prompt,
+    `[User sent to Claude session "${setup.sessionId}"; bridge message "${args.message_id}"; context only]\n\n${args.message}`);
+  const history = toolValue(await callTool(setup.client, 'bridge_ui_history', { session_id: setup.sessionId }, meta));
+  assert.equal(history.session_id, setup.sessionId);
+  assert.deepEqual(history.messages.map(message => [message.id, message.message, message.manual]),
+    [[args.message_id, args.message, true]]);
+  const otherHistory = toolValue(await callTool(setup.client, 'bridge_ui_history', { session_id: setup.sessionId }, metadata('other-panel-owner')));
+  assert.deepEqual(otherHistory.messages, []);
+  toolValue(await callTool(setup.client, 'bridge_ui_send', args, meta));
+  assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
+  assert.equal(setup.notifications.length, 1);
 });
 
 test('Claude can discover and address a Codex chat before receiving any bridge message', windowsOnly, async t => {
@@ -700,13 +751,13 @@ test('a v0.1.0 pairing record cannot constrain direct sends or leak into new sta
   assert.equal(setup.claude.messages.filter(entry => entry.message.type === 'user').length, 1);
 });
 
-test('two Codex tasks and two Claude sessions can freely send to every opposite-side conversation', windowsOnly, async t => {
+test('two Codex tasks can address simultaneous Claude Desktop and CLI sessions without confusing their identities', windowsOnly, async t => {
   const setup = await setupMcp(t);
   const peerA = startMcp(t, claudeEnv(setup));
   await initialize(peerA);
   const claudeB = await mockPipe(t);
-  const peerB = startMcp(t, claudeEnv(setup), { parentProxy: true });
-  const sessionB = registerClaudeParent(setup, peerB.child.pid, claudeB.pipePath);
+  const peerB = startMcp(t, { ...claudeEnv(setup), CLAUDE_CODE_SESSION_ID: setup.sessionId }, { parentProxy: true });
+  const sessionB = registerClaudeParent(setup, peerB.child.pid, claudeB.pipePath, 'cli');
   await initialize(peerB);
 
   for (const codexId of ['codex-target-a', 'codex-target-b']) {
@@ -740,12 +791,15 @@ test('two Codex tasks and two Claude sessions can freely send to every opposite-
   }
   for (const [peer, claudeId, otherId] of [[peerA, setup.sessionId, sessionB], [peerB, sessionB, setup.sessionId]]) {
     const status = toolValue(await callTool(peer, 'bridge_status'));
+    assert.equal(status.sender_id, claudeId);
     assert.equal(status.messages.length, 2);
     assert.ok(status.messages.every(message => message.route.from.kind === 'claude' && message.route.from.id === claudeId));
     assert.doesNotMatch(JSON.stringify(status), new RegExp(`From ${otherId} to`));
   }
-  for (const call of setup.notifications) {
-    assert.ok([setup.sessionId, sessionB].some(id => call.arguments.prompt.includes(`Claude Desktop session ${JSON.stringify(id)}; bridge message`)));
+  for (const [index, call] of setup.notifications.entries()) {
+    const label = index < 2 ? 'Claude Desktop' : 'Claude Code CLI';
+    const id = index < 2 ? setup.sessionId : sessionB;
+    assert.ok(call.arguments.prompt.startsWith(`[From ${label} session ${JSON.stringify(id)}; bridge message`));
     assert.doesNotMatch(call.arguments.prompt, /context only/);
   }
 });

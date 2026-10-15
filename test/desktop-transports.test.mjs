@@ -9,7 +9,7 @@ function answer(socket, id, result) {
   socket.write(encodeFrame({ jsonrpc: '2.0', id, result }));
 }
 
-test('Claude adapter writes auth first, preserves Unicode, and does not claim model delivery', async t => {
+test('issue #1: Claude adapter retains the bypass peer envelope, auth order, Unicode, and honest receipt', async t => {
   const pipe = await mockPipe(t);
   const token = `test-secret-${randomUUID()}`;
   const message = 'Hello, Claude. 🦊\nReview "src/file with spaces.js".';
@@ -26,6 +26,9 @@ test('Claude adapter writes auth first, preserves Unicode, and does not claim mo
   assert.equal(envelope.message.role, 'user');
   assert.equal(envelope.message.content,
     `<cross-session-message from-name="Codex desktop bridge" from-mode="bypass">\n${message}\n</cross-session-message>`);
+  assert.equal(Object.hasOwn(envelope, 'from-mode'), false);
+  assert.equal(Object.hasOwn(envelope, 'permissionMode'), false);
+  assert.doesNotMatch(envelope.message.content, /<own-child/);
   assert.doesNotMatch(JSON.stringify(response), new RegExp(token));
 });
 
