@@ -4,19 +4,39 @@
 
 Asynchronous, two-way messaging between **Codex** conversations (Desktop tasks or terminal sessions) and local **Claude Code CLI or Claude Desktop Code sessions** on native Windows. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
 
+On macOS, `send_to_codex` can use a configured SSH-host app-server connection. This route requires an explicit SSH alias and a loaded, idle chat on that host. Local Claude Code inboxes use Unix sockets with process-identity checks. The SSH route does not use Codex's protected local app-tools socket. Windows retains its Desktop, daemon, and terminal queue transports. The merged macOS implementation still needs a live smoke test; see [Compatibility](#compatibility).
+
 Codex and Claude are peers. Either can start a conversation, ask the other to do something, exchange ideas, or share progress. The bridge carries text and leaves its meaning and purpose to the participants.
 
 ## Requirements
 
-- Native Windows, Codex Desktop or a terminal Codex CLI, and a local Claude Code session in the terminal or Claude Desktop Code tab with a live messaging inbox. Claude Desktop is not required.
+- **Windows:** native Windows, Codex Desktop or a terminal Codex CLI, and a local Claude Code session in the terminal or Claude Desktop Code tab with a live messaging inbox. Claude Desktop is not required.
+- **macOS:** a local Claude Code session with a live Unix inbox and verifiable process registration; outbound Codex delivery requires the configured SSH route below and an already-loaded idle target.
 - Node.js 20+ available on `PATH`.
 - The plugin's MCP server enabled and authorized normally in both applications.
 
-No npm dependencies, additional agent, Channels, or Stop hooks are needed. The selected Claude session and Codex start their own Node MCP servers; agents use named tools without invoking a shell script for each message. The local installer grants one documented Claude tool permission when it installs Claude; the MCP server never changes its own permissions or bypasses a denied action. WSL, macOS, Linux, remote sessions, and Claude's ordinary hosted Chat conversations are outside this bridge's scope.
+No npm dependencies, additional agent, Channels, or Stop hooks are needed. The selected Claude session and Codex start their own Node MCP servers; agents use named tools without invoking a shell script for each message. The local installer grants one documented Claude tool permission when it installs Claude; the MCP server never changes its own permissions or bypasses a denied action. WSL, Linux end-to-end operation, remote Claude sessions, and Claude's ordinary hosted Chat conversations are outside this bridge's scope. Linux sends fail closed because its native process-identity contract is not yet supported.
+
+### macOS SSH-host setup
+
+1. Configure an authenticated SSH alias in `~/.ssh/config`. Codex must be installed and authenticated in that host's login shell. A loopback alias on the same Mac also works when a local SSH service is available.
+2. In Codex Desktop, connect through **Settings > Connections > SSH** and open the destination chat on that connection. A chat running under **This computer** is owned by a different server even when both connections use the same filesystem.
+3. Install or update with the chosen alias:
+
+   ```sh
+   CODEX_CLAUDE_BRIDGE_SSH_HOST=my-codex-host node scripts/install.mjs
+   ```
+
+   The installer validates and pins this alias into both staged MCP configurations. Use the same alias on later updates. Direct marketplace installations must forward or configure `CODEX_CLAUDE_BRIDGE_SSH_HOST` themselves.
+4. Reload the plugin in local Claude Code using the client-specific instructions below. In Claude Desktop, use the local **Code** session; cloud Chat cannot use these local tools. Use normal MCP permissions; the adapter does not change approval mode.
+5. `list_codex_chats` lists only chats already loaded by this SSH server, with `source: "ssh"`. `send_to_codex` with `transport: "auto"` or `"ssh"` uses only the pinned alias. `desktop` and `terminal` are rejected while SSH is configured, even if a local conversation has the same ID.
+6. The target must already be loaded and idle. Open it on the configured connection and wait for active work to finish before sending. The bridge never calls `thread/resume`, creates a replacement thread, starts a server, changes thread permissions, or retries a submitted turn.
+
+The SSH transport uses `/usr/bin/ssh` with batch authentication and strict host-key verification, then speaks the WebSocket app-server protocol through `codex app-server proxy`. An unavailable or invalid configured route stops delivery; it does not fall back to a local endpoint or queue. Submitted receipts include the accepted Codex `turnId`; they do not mean the model has read or completed the turn. A lost reply after a write is uncertain and must be inspected before another submission. User-owned SSH services and credentials remain outside the bridge installer.
 
 ## Installation
 
-The local installer needs the `codex` and `claude` management CLIs on `PATH` for the applications you select. These commands register the plugin; they do not launch separate AI conversations. Run the first installation from a Codex Desktop task when possible so the installer can also register the running Desktop host. Otherwise, use a bridge tool once in Codex Desktop to register that host before Claude tries Desktop discovery.
+The local installer needs the `codex` and `claude` management CLIs on `PATH` for the applications you select. These commands register the plugin; they do not launch separate AI conversations. For Windows Desktop routing, run the first installation from a Codex Desktop task when possible so the installer can also register the running Desktop host. Otherwise, use a bridge tool once in Codex Desktop to register that host before Claude tries Desktop discovery. The configured macOS SSH route uses its pinned alias independently of this local host registry.
 
 To install from the public source repository:
 
@@ -25,6 +45,8 @@ git clone https://github.com/KeeVeeG/codex-claude-desktop-bridge.git
 Set-Location codex-claude-desktop-bridge
 node scripts/install.mjs
 ```
+
+On macOS, use `cd codex-claude-desktop-bridge` instead of PowerShell's `Set-Location`, and run the installer with the SSH alias as shown above.
 
 The installer stages the generated native compatibility runtime under `~/plugins/codex-claude-desktop-bridge`, preserves existing personal marketplace entries, and installs or updates the plugin through the native Codex and Claude CLIs. Changed marketplace JSON and previous staged files are backed up. It does not copy repository history, tests, scratch files, or secrets.
 
@@ -62,16 +84,16 @@ Seeing the plugin's skill does not confirm that its MCP server connected. If the
 
 Both applications use the same state directory under `~/.local/share/codex-claude-desktop-bridge`. The installer pins its absolute path in the staged MCP configuration for both apps; the source configuration remains portable. This avoids Windows MSIX virtualization of `LOCALAPPDATA`, which can otherwise put each app's records in a different private location. Project working directories do not affect message routing or host discovery. An explicit `CODEX_CLAUDE_BRIDGE_STATE_DIR` override is honored when staging; use the same location for both applications.
 
-Codex Desktop host discovery is registered when its MCP server starts with a valid Codex task ID. After an app restart, the MCP server can reuse a previously registered task ID to refresh the new local endpoint at startup. The bridge retains recent endpoints, so it can use another live Codex MCP process if the latest one exits or its context task was removed. Running the installer from a Codex Desktop task also registers the host. Claude can then discover Desktop conversations without first receiving a bridge message. If no registered endpoint has an accepted task ID, call `bridge_status` once from an open Codex Desktop task to register its current ID. This registration sends no model prompt. Terminal discovery uses the local Codex daemon independently.
+Windows Codex Desktop host discovery is registered when its MCP server starts with a valid Codex task ID. After an app restart, the MCP server can reuse a previously registered task ID to refresh the new local endpoint at startup. The bridge retains recent endpoints, so it can use another live Codex MCP process if the latest one exits or its context task was removed. Running the installer from a Codex Desktop task also registers the host. Claude can then discover Desktop conversations without first receiving a bridge message. If no registered endpoint has an accepted task ID, call `bridge_status` once from an open Codex Desktop task to register its current ID. This registration sends no model prompt. Terminal discovery uses the local Codex daemon independently; configured macOS SSH discovery lists only its selected server.
 
 ## Tools and workflow
 
 | Tool | Purpose |
 | --- | --- |
 | `list_claude_sessions` | List safe metadata for local Claude Code conversations. |
-| `list_codex_chats` | List local Codex conversation titles and IDs from Desktop and the terminal daemon; `source` identifies the discovery transport, not the conversation's current client. Optional `limit` is 1–50 recent conversations per source. Pinned Desktop tasks are also included; duplicate IDs retain the Desktop entry. A source that fails is reported in `structuredContent.warnings` and, for clients that show only text, in a second text block after the chats array. |
+| `list_codex_chats` | List Codex titles and IDs. Windows combines Desktop and terminal-daemon discovery; configured macOS SSH lists only that server's loaded chats (`source: "ssh"`). `source` identifies discovery transport, not the current client. Optional `limit` is 1–50 conversations per source. Windows also includes pinned Desktop tasks and retains Desktop entries for duplicate IDs. Source failures appear in `structuredContent.warnings` and a second text block after the chats array. |
 | `send_to_claude` | Send `message` to the exact `session_id`; optional `message_id` supports safe retry inspection. |
-| `send_to_codex` | Send `message` to the exact `thread_id`; optional `transport` is `auto` (default), `desktop`, or `terminal`. Optional `message_id` supports safe retry inspection. |
+| `send_to_codex` | Send `message` to the exact `thread_id`; optional `transport` is `auto` (default), `desktop`, `terminal`, or `ssh`. Configured macOS SSH accepts only `auto`/`ssh` and pins both to its selected host. Optional `message_id` supports safe retry inspection. |
 | `bridge_status` | Inspect the caller's recent outgoing delivery records; optional `limit` is 1–100. |
 | `bridge_doctor` | Check local transport compatibility, caller identity, and state-directory readiness without sending messages. Works even when caller identity is unavailable. |
 | `bridge_panel` | Open the Claude conversation panel in the current Codex chat. |
@@ -99,7 +121,7 @@ Use `bridge_doctor` when discovery or delivery stops working. It checks the loca
 
 In Claude CLI, `/status` shows the native inbox as `Peer address`; `--bare` sessions have no inbox. A session that lacks an inbox cannot receive bridge messages or provide the live caller identity needed to send. Restricted plugin/MCP configuration can also prevent tools from loading. Claude's `crossSessionInbound` controls may hold or refuse incoming messages even when the transport write succeeds. Check the receiving session's normal approval flow and effective settings; the bridge neither reports those outcomes as read receipts nor changes inbound controls. See [Claude cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging#control-inbound-messages).
 
-The native peer envelope retains `from-mode="bypass"`, the v0.3.3 compatibility fix for [issue #1](https://github.com/KeeVeeG/codex-claude-desktop-bridge/issues/1). Removing it makes Bypass recipients hold bridge messages by default, often silently in Desktop. This wire classification is shared by Desktop and CLI; it does not detect the sending Codex task's permission mode or change the receiving Claude session's tool permissions. A prompting receiver (including CLI Manual) may instead hold a bypass-class message for approval. Explicit `crossSessionInbound: hold` or `refuse` still applies; the bridge never changes those settings.
+The native peer envelope retains `from-mode="bypass"`, the v0.3.3 compatibility fix for [issue #1](https://github.com/KeeVeeG/codex-claude-desktop-bridge/issues/1). Removing it makes Bypass recipients hold bridge messages by default, often silently in Desktop. This wire classification is shared by Desktop and CLI on every supported platform; it does not detect the sending Codex task's permission mode or change the receiving Claude session's tool permissions. A prompting receiver (including CLI Manual) may instead hold a bypass-class message for approval. Explicit `crossSessionInbound: hold` or `refuse` still applies; the bridge never changes those settings.
 
 ### Conversation panel
 
@@ -113,7 +135,7 @@ The composer follows Codex's `desktop.composerEnterBehavior` setting when it is 
 
 The public panel chrome, system notices, statuses, errors, accessibility labels, and demo fixtures are English-only. Conversation titles, project paths, and exchanged messages remain verbatim so user content is never translated or altered. A successful send displays "Sent to Claude"; read receipts are unavailable, so this status does not wait for a read confirmation.
 
-Historical Claude Code conversations can appear without a live inbox. Their saved bridge history stays readable, but sending requires that exact conversation to be open as a live native Windows CLI or Desktop Code session. The panel does not launch a conversation. This catalog covers local Code sessions, not Claude's ordinary hosted Chat conversations.
+Historical Claude Code conversations can appear without a live inbox. Their saved bridge history stays readable, but sending requires that exact conversation to be open as a supported local CLI or Desktop Code session with a verified live inbox. The panel does not launch a conversation. This catalog covers local Code sessions, not Claude's ordinary hosted Chat conversations. The new macOS SSH route does not establish support for the Desktop conversation panel or its context notices.
 
 An uncertain Claude delivery is never automatically retried. A notice failure after a successful Claude send does not cause the original message to be sent again. When the context notice failed definitively, the panel offers `bridge_ui_retry_notice`; this retries only the Codex notice and never the original Claude delivery. The panel uses MCP Apps resources and requires a host with native MCP Apps support. Opening `ui/bridge.html#demo` outside the host shows explicitly labelled fixture data for preview, with no live application access.
 
@@ -123,9 +145,11 @@ A `claude` session started in PowerShell or another terminal registers the same 
 
 A terminal session is reachable only while its process is running. Closing the terminal ends its inbox, and its saved bridge history stays readable. Supported sessions under your user profile are addressable by exact session ID, the same trust boundary as Desktop sessions. The bridge accepts the `claude-desktop`, `cli`, and `sdk-cli` entrypoints; print-mode sessions such as `claude -p` must still be running. After installing or updating, use `/reload-plugins` and check `/mcp`; if old tools remain, exit and resume the exact conversation.
 
-### Terminal Codex sessions
+### Windows terminal Codex sessions
 
 `list_codex_chats` combines Desktop discovery with Codex's local app-server daemon. The daemon lists conversations from all creation clients, most recently updated first, because a conversation can move between Desktop and CLI through resume. `source: "desktop"` or `"terminal"` identifies where the entry was discovered; it does not prove where the conversation is open now. If both sources return the same ID, the Desktop entry is retained. Codex CLI can call `send_to_claude` and `bridge_status` with its trusted per-call identity even when the daemon is unavailable.
+
+Without a configured macOS SSH route, `send_to_codex` uses the existing local routing rules below. The daemon and queue adapters described here require native Windows; an explicit `ssh` transport requires the macOS SSH configuration above.
 
 `send_to_codex` accepts an optional `transport`:
 
@@ -155,7 +179,9 @@ Local validation has exercised the adapters with Claude Desktop 2.7032.0.0, Clau
 
 A real Claude Code 2.1.299 print-mode session in Bypass permissions received an authenticated native inbox message and replied through the bridge MCP server to a simulated Codex endpoint, preserving the exact source, recipient, and test nonce without changing the receiver's mode. That smoke test validates the live Claude side; it is not an end-to-end run against the real Codex Desktop UI or evidence that every inbound policy permits delivery. These are observed validation versions rather than a broad compatibility guarantee; private application interfaces can change in later releases.
 
-The MCP server uses standard stdio. Native delivery uses private Windows interfaces in the two applications, so application updates may require adapter changes.
+The author of [PR #2](https://github.com/KeeVeeG/codex-claude-desktop-bridge/pull/2) reported a live macOS smoke test of the original contribution. The merged code changes SSH routing, loaded-thread handling, endpoint validation, and process-identity checks; no new live macOS smoke test has validated this merged implementation. Simulated transport tests do not establish end-to-end macOS compatibility.
+
+The MCP server uses standard stdio. Native Claude inboxes and local Desktop delivery depend on application interfaces that can change. macOS Unix socket paths must be absolute, normalized, and no longer than 103 UTF-8 bytes. Darwin process registration is checked against `ps` process-start output with UTC and C locale settings; unverifiable identities are refused. Linux process identity and end-to-end delivery remain unsupported.
 
 Application delivery credentials remain local and are not included in chat messages or model-supplied routing arguments. The bridge sends explicit messages rather than entire conversation histories and does not emit diagnostic logs of tool arguments.
 
@@ -165,7 +191,7 @@ Root `plugin.json` and `mcp.json` are the canonical Agent Plugins 1.0 definition
 
 The default installer, Git marketplaces, and release marketplace use that native runtime. Agent Plugins 1.0 cannot declare `env_vars`, while the current Codex MCP launcher requires explicit forwarding of its native pipe context. Keeping the deployed native runtime free of root portable manifests preserves this forwarding. Its canonical sources are stored under `config/` so it can still validate and reinstall itself. Codex declares its MCP command inline and resolves `cwd` from the installed plugin root; Claude uses `.mcp.json` with `${CLAUDE_PLUGIN_ROOT}`.
 
-A separate `-portable-<version>.zip` contains the root Agent Plugins manifests. Its host must provide the application's native execution context; installing that format alone does not make Desktop routing available. Use the default native package for the current Windows bridge. The agent workflow is in `skills/claude-bridge` in both layouts.
+A separate `-portable-<version>.zip` contains the root Agent Plugins manifests. Its host must provide the application's native execution context; installing that format alone does not make Desktop routing available. Use the default native package for Windows or the configured macOS SSH route. The agent workflow is in `skills/claude-bridge` in both layouts.
 
 ## Development
 
@@ -175,11 +201,11 @@ npm run manifests:check
 npm test
 ```
 
-Tests use temporary registries and real local named pipes with simulated application endpoints. They do not send messages to your live conversations or change application settings. Generated test artifacts stay under the ignored `work/` directory.
+Tests use temporary registries, local IPC, and simulated application/SSH endpoints. They do not send messages to your live conversations or change application settings. Generated test artifacts stay under the ignored `work/` directory.
 
 Test files run sequentially because the lock-recovery stress tests already start multiple child processes. Windows CI checks Node.js 20, 22, 24, and 26 and builds the release package.
 
-The runtime has no npm dependencies. `lib/claude-desktop.mjs`, `lib/codex-desktop.mjs`, and `lib/codex-daemon.mjs` isolate the application-specific protocols, `lib/desktop-service.mjs` routes direct messages, and `lib/store.mjs` stores delivery records in the shared user-profile state directory.
+The runtime has no npm dependencies. `lib/claude-desktop.mjs`, `lib/codex-desktop.mjs`, `lib/codex-daemon.mjs`, and `lib/codex-ssh.mjs` isolate the application-specific protocols, `lib/desktop-service.mjs` routes direct messages, and `lib/store.mjs` stores delivery records in the shared user-profile state directory.
 
 Only connection attempts have short technical timeouts (10 seconds for Claude, up to 30 seconds for a Codex tool call). There is no timeout for a person or agent to answer a message.
 

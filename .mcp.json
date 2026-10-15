@@ -18,7 +18,8 @@
         "CODEX_CLAUDE_BRIDGE_REGISTRY_DIR",
         "CODEX_CLAUDE_BRIDGE_CODEX_BIN",
         "CODEX_CLAUDE_BRIDGE_DAEMON",
-        "CODEX_HOME"
+        "CODEX_HOME",
+        "CODEX_CLAUDE_BRIDGE_SSH_HOST"
       ]
     }
   }

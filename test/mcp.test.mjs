@@ -288,7 +288,7 @@ test('MCP forwards explicit Codex transport and rejects unsupported choices befo
       direction: 'to_codex', message: args.message, createdAt: 1, status: 'submitted', fingerprint: 'a'.repeat(64) } };
   });
   await initialize(client);
-  for (const transport of ['auto', 'desktop', 'terminal']) {
+  for (const transport of ['auto', 'desktop', 'terminal', 'ssh']) {
     const response = await callTool(client, 'send_to_codex', { thread_id: 'target', message: 'Text.', transport });
     assert.notEqual(response.result.isError, true);
   }
@@ -296,7 +296,7 @@ test('MCP forwards explicit Codex transport and rejects unsupported choices befo
     const response = await callTool(client, 'send_to_codex', { thread_id: 'target', message: 'Text.', transport });
     assert.equal(response.result.isError, true);
   }
-  assert.deepEqual(calls.map(call => call.args.transport), ['auto', 'desktop', 'terminal']);
+  assert.deepEqual(calls.map(call => call.args.transport), ['auto', 'desktop', 'terminal', 'ssh']);
 });
 
 test('MCP rejects invalid and reserved message IDs before invoking the executor', async t => {
@@ -541,7 +541,7 @@ test('Codex MCP startup refreshes a previous host after restart without a startu
   const fixture = await nativeFixture(t);
   const livePipe = await mockPipe(t, { framed: true });
   const { publishCodexHost, getCodexHost } = await import('../lib/codex-host.mjs');
-  publishCodexHost({ stateDir: fixture.stateDir, pipePath: '\\\\.\\pipe\\previous-codex-app',
+  publishCodexHost({ stateDir: fixture.stateDir, pipePath: process.platform === 'win32' ? '\\\\.\\pipe\\previous-codex-app' : '/tmp/previous-codex-app.sock',
     threadId: 'previous-real-task', pid: 2_147_483_647 });
   const client = startMcp(t, { CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir,
     CODEX_APP_TOOLS_PIPE_PATH: livePipe.pipePath });

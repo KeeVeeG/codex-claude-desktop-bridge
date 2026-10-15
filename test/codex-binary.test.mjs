@@ -8,22 +8,24 @@ import { resolveCodexExecutable } from '../lib/codex-binary.mjs';
 const VENDOR = path.join('node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64',
   'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
 const filesOnly = known => candidate => known.includes(candidate);
+const windowsOnly = { skip: process.platform !== 'win32' && 'Windows Codex executable and package-manager shim layout.' };
 
 test('an existing override wins and a missing override yields null without falling back', () => {
-  const override = path.join('C:', 'tools', 'codex.exe');
-  const found = resolveCodexExecutable({ env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: override, PATH: 'C:\\bin' },
-    exists: filesOnly([override, path.join('C:\\bin', 'codex.exe')]) });
+  const override = path.join(os.tmpdir(), 'tools', 'codex.exe');
+  const bin = path.join(os.tmpdir(), 'bin');
+  const found = resolveCodexExecutable({ env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: override, PATH: bin },
+    exists: filesOnly([override, path.join(bin, 'codex.exe')]) });
   assert.equal(found, override);
-  assert.equal(resolveCodexExecutable({ env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: override, PATH: 'C:\\bin' },
-    exists: filesOnly([path.join('C:\\bin', 'codex.exe')]) }), null);
+  assert.equal(resolveCodexExecutable({ env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: override, PATH: bin },
+    exists: filesOnly([path.join(bin, 'codex.exe')]) }), null);
 });
 
-test('a native codex.exe on PATH is used directly', () => {
+test('a native codex.exe on PATH is used directly', windowsOnly, () => {
   const direct = path.join('C:\\bin', 'codex.exe');
   assert.equal(resolveCodexExecutable({ env: { PATH: 'C:\\other;C:\\bin' }, exists: filesOnly([direct]) }), direct);
 });
 
-test('an npm codex.cmd shim resolves to the vendored native executable beside it', () => {
+test('an npm codex.cmd shim resolves to the vendored native executable beside it', windowsOnly, () => {
   const dir = 'C:\\npm';
   const vendored = path.join(dir, VENDOR);
   assert.equal(resolveCodexExecutable({ env: { PATH: dir }, exists: filesOnly([path.join(dir, 'codex.cmd'), vendored]) }), vendored);
@@ -32,8 +34,9 @@ test('an npm codex.cmd shim resolves to the vendored native executable beside it
 
 test('nothing on PATH yields null and the Path spelling is honored', () => {
   assert.equal(resolveCodexExecutable({ env: { PATH: '' }, exists: () => false }), null);
-  const direct = path.join('C:\\bin', 'codex.exe');
-  assert.equal(resolveCodexExecutable({ env: { Path: 'C:\\bin' }, exists: filesOnly([direct]) }), direct);
+  const bin = path.join(os.tmpdir(), 'bin');
+  const direct = path.join(bin, 'codex.exe');
+  assert.equal(resolveCodexExecutable({ env: { Path: bin }, exists: filesOnly([direct]) }), direct);
 });
 
 // Shim shapes from the generators: npm's cmd-shim (%dp0%), pnpm's @zkochan/cmd-shim (%~dp0 or an absolute target), Volta's `volta run`.
@@ -46,7 +49,7 @@ const vendoredIn = (directory, [name, triple]) => path.join(directory, 'node_mod
 const shimOnly = (directory, text, ...files) => ({ env: { PATH: directory }, exists: filesOnly([path.join(directory, 'codex.cmd'), ...files]),
   read: file => { assert.equal(file, path.join(directory, 'codex.cmd')); return text; } });
 
-test('an npm shim resolves the Windows ARM64 platform package, preferring the running architecture', () => {
+test('an npm shim resolves the Windows ARM64 platform package, preferring the running architecture', windowsOnly, () => {
   const dir = 'C:\\npm';
   const nested = path.join(dir, 'node_modules', '@openai', 'codex');
   const text = npmShim('%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js');
@@ -62,7 +65,7 @@ test('an npm shim resolves the Windows ARM64 platform package, preferring the ru
   assert.equal(resolveCodexExecutable({ ...shimOnly(dir, text), arch: 'arm64' }), null);
 });
 
-test('a pnpm shim is followed through its junction to the platform package beside the real package', () => {
+test('a pnpm shim is followed through its junction to the platform package beside the real package', windowsOnly, () => {
   const dir = 'C:\\pnpm';
   const linked = path.join(dir, 'global', '5', 'node_modules', '@openai', 'codex');
   const store = path.join(dir, 'global', '5', '.pnpm', '@openai+codex@0.162.1', 'node_modules', '@openai');
@@ -78,7 +81,7 @@ test('a pnpm shim is followed through its junction to the platform package besid
   assert.equal(resolveCodexExecutable({ ...shimOnly(path.join(dir, 'bin'), upward, exe), realpath, arch: 'x64' }), exe);
 });
 
-test('a Volta shim resolves the package image under its home, and only from a bin directory', () => {
+test('a Volta shim resolves the package image under its home, and only from a bin directory', windowsOnly, () => {
   const home = 'C:\\Volta';
   const image = path.join(home, 'tools', 'image', 'packages', '@openai', 'codex');
   const exe = vendoredIn(path.join(image, 'node_modules', '@openai', 'codex'), X64);
@@ -88,7 +91,7 @@ test('a Volta shim resolves the package image under its home, and only from a bi
   assert.equal(resolveCodexExecutable({ ...shimOnly(path.join(home, 'scripts'), voltaShim, exe), arch: 'x64' }), null);
 });
 
-test('a shim that names no codex launcher, or a package without a platform package, resolves to null', () => {
+test('a shim that names no codex launcher, or a package without a platform package, resolves to null', windowsOnly, () => {
   const dir = 'C:\\tools';
   assert.equal(resolveCodexExecutable(shimOnly(dir, '@echo off\r\n"%~dp0\\other.exe" %*\r\n')), null);
   assert.equal(resolveCodexExecutable(shimOnly(dir, npmShim('%dp0%\\node_modules\\other\\bin\\other.js'))), null);
@@ -96,7 +99,7 @@ test('a shim that names no codex launcher, or a package without a platform packa
     read: () => { throw new Error('unreadable'); } }), null);
 });
 
-test('a pnpm-style layout on disk resolves through real junctions with the default file access', t => {
+test('a pnpm-style layout on disk resolves through real junctions with the default file access', windowsOnly, t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-binary-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const shims = path.join(root, 'pnpm');

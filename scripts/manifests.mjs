@@ -10,7 +10,7 @@ export const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.js
 export const NATIVE_DIRECTORY = 'compatibility/native';
 export const COMMON_RUNTIME_FILES = [
   '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', '.mcp.json',
-  'lib/store.mjs', 'lib/claude-desktop.mjs', 'lib/codex-desktop.mjs',
+  'lib/store.mjs', 'lib/claude-desktop.mjs', 'lib/claude-process.mjs', 'lib/local-socket.mjs', 'lib/codex-desktop.mjs', 'lib/codex-ssh.mjs',
   'lib/desktop-service.mjs', 'lib/codex-host.mjs', 'scripts/mcp.mjs',
   'lib/claude-history.mjs', 'lib/bridge-history.mjs', 'lib/manual-service.mjs', 'lib/codex-settings.mjs', 'lib/ws-jsonrpc.mjs', 'lib/codex-binary.mjs', 'lib/codex-daemon.mjs', 'lib/codex-peer.mjs', 'ui/bridge.html',
   'scripts/manifests.mjs', 'scripts/install.mjs', 'skills/claude-bridge/SKILL.md',
@@ -25,10 +25,10 @@ const stringArray = value => Array.isArray(value) && value.every(item => typeof 
 const json = value => JSON.stringify(value, null, 2) + '\n';
 export const CODEX_CONTEXT_ENV_VARS = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CODEX_HOME', 'USERPROFILE', 'HOME', 'PATH',
   'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR',
-  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON'];
+  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON', 'CODEX_CLAUDE_BRIDGE_SSH_HOST'];
 export const CLAUDE_CONTEXT_ENV_VARS = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CLAUDE_CODE_MESSAGING_SOCKET',
   'LOCALAPPDATA', 'USERPROFILE', 'HOME', 'PATH', 'CLAUDE_CONFIG_DIR', 'CODEX_CLAUDE_BRIDGE_STATE_DIR', 'CODEX_CLAUDE_BRIDGE_REGISTRY_DIR',
-  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON', 'CODEX_HOME'];
+  'CODEX_CLAUDE_BRIDGE_CODEX_BIN', 'CODEX_CLAUDE_BRIDGE_DAEMON', 'CODEX_HOME', 'CODEX_CLAUDE_BRIDGE_SSH_HOST'];
 
 function readBytes(rootDirectory, relative) {
   const filename = path.join(rootDirectory, relative);

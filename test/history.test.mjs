@@ -46,6 +46,25 @@ test('bridge exchange joins both directions only for the exact owner and Claude 
   assert.equal(result.has_more, false);
 });
 
+test('the local panel excludes SSH deliveries with the same owning thread UUID', async t => {
+  const fixture = await nativeFixture(t);
+  const sessionId = randomUUID();
+  const ownerThreadId = randomUUID();
+  const outgoing = ledger(fixture, ownerThreadId);
+  const incoming = ledger(fixture, `claude:${sessionId}`);
+  const claude = { kind: 'claude', id: sessionId };
+  const local = { kind: 'codex', id: ownerThreadId };
+  message(incoming, claude, local, 'same-id', 'Reply to the local owner.');
+  for (const host_id of ['ssh:host-a', 'ssh:host-b']) {
+    message(incoming, claude, { ...local, host_id }, 'same-id', `Reply to ${host_id}.`);
+    message(outgoing, { ...local, host_id }, claude, 'remote-outgoing', `From ${host_id}.`);
+  }
+  const result = await getBridgeConversation({ stateDir: fixture.stateDir, ownerThreadId, sessionId });
+  assert.deepEqual(result.messages.map(record => [record.id, record.message]), [['same-id', 'Reply to the local owner.']]);
+  const exchange = await scanBridgeExchange({ stateDir: fixture.stateDir, ownerThreadId });
+  assert.equal(exchange.records.length, 1, 'catalog activity must also exclude same-UUID SSH routes');
+});
+
 test('history pagination reaches every message once even when timestamps and IDs overlap across directions', async t => {
   const fixture = await nativeFixture(t);
   const sessionId = randomUUID();
@@ -97,7 +116,8 @@ for (const entrypoint of ['claude-desktop', 'cli', 'sdk-cli']) test(`catalog ind
   fs.mkdirSync(registryDir);
   fs.writeFileSync(path.join(registryDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid,
     sessionId, entrypoint, procStart: '1', pidDomain: 'fixture',
-    messagingSocketPath: '\\\\.\\pipe\\fixture-history-session', cwd: fixture.cwd, name: 'Live reference conversation' }));
+    messagingSocketPath: process.platform === 'win32' ? '\\\\.\\pipe\\fixture-history-session' : '/tmp/fixture-history-session.sock',
+    cwd: fixture.cwd, name: 'Live reference conversation' }));
   const ownLedger = ledger(fixture, 'catalog-owner');
   message(ownLedger, { kind: 'codex', id: 'catalog-owner' }, { kind: 'claude', id: oldSession }, 'contact', 'Sent through bridge');
   const result = await listClaudeConversations({ projectsDir, registryDir, stateDir: fixture.stateDir, ownerThreadId: 'catalog-owner' });

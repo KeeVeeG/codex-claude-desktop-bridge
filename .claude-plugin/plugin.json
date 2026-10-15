@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-desktop-bridge",
   "version": "0.3.3",
-  "description": "Send native messages between Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on native Windows.",
+  "description": "Message Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on Windows, with a configured SSH route on macOS.",
   "author": {
     "name": "KeeVeeG",
     "url": "https://github.com/KeeVeeG"
@@ -14,6 +14,7 @@
     "terminal",
     "messaging",
     "windows",
+    "macos",
     "mcp"
   ],
   "skills": "./skills/",

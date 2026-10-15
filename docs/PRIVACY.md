@@ -2,11 +2,13 @@
 
 ## Data flow
 
-The bridge lists conversation titles/identifiers so a sender can select a destination, then forwards explicitly submitted text to that Codex Desktop or local Claude Code conversation (CLI or Desktop Code on native Windows). The sender names an exact destination for each message; there is no exclusive pairing. Incoming messages include the verified sender's conversation ID so the recipient can reply. The bridge does not automatically copy entire conversation histories or read project-file contents. A message can itself contain code, paths, personal data, or other information its sender chooses to include.
+The bridge lists conversation titles/identifiers so a sender can select a destination, then forwards explicitly submitted text to that Codex or supported local Claude Code conversation. Windows uses native Desktop and terminal transports; macOS can use a configured SSH host for Codex and local Unix inboxes for Claude. The sender names an exact destination for each message; there is no exclusive pairing. Incoming messages include the verified sender's conversation ID so the recipient can reply. The bridge does not automatically copy entire conversation histories or read project-file contents. A message can itself contain code, paths, personal data, or other information its sender chooses to include.
 
-The plugin communicates with local application endpoints. It provides no public HTTP service, analytics endpoint, or hosted message relay. After delivery, Codex or Claude processes the message through the user's existing application/account. Those applications and their providers can process and retain conversation content under their own account settings and policies. Local transport does not mean the receiving AI application operates offline.
+The plugin communicates with local application endpoints or, when configured on macOS, the selected SSH host. It provides no public HTTP service, analytics endpoint, or hosted message relay. After delivery, Codex or Claude processes the message through the user's existing application/account. Those applications and their providers can process and retain conversation content under their own account settings and policies. Local transport does not mean the receiving AI application operates offline.
 
-For daemon discovery and delivery the bridge launches `codex.exe app-server proxy` (no shell) and talks to Codex's local daemon. With explicit terminal transport, sessions not attached to the daemon are addressed with `codex.exe queue --thread <id> --message <text>` (no shell), so the message text appears on that process's command line while it runs. It reads stored Codex thread metadata, including first-message previews and working directories, to build the chat listing. Codex caller identity comes from the host's per-call metadata; a thread's creation origin does not identify its current client. Daemon and queue delivery submit peer messages as user input, and `bridge_doctor` reports the CLI and daemon versions. The bridge transports are local; the receiving application's normal model processing may send messages to its configured provider. Message history is stored locally as before.
+For Windows daemon discovery and delivery the bridge launches `codex.exe app-server proxy` (no shell) and talks to Codex's local daemon. With explicit terminal transport, sessions not attached to the daemon are addressed with `codex.exe queue --thread <id> --message <text>` (no shell), so the message text appears on that process's command line while it runs. It reads stored Codex thread metadata, including first-message previews and working directories, to build the chat listing. Codex caller identity comes from the host's per-call metadata; a thread's creation origin does not identify its current client. Daemon and queue delivery submit peer messages as user input, and `bridge_doctor` reports the CLI and daemon versions. Message history is stored locally as before.
+
+The optional macOS SSH route launches `/usr/bin/ssh` with the configured alias, batch authentication, and strict host-key verification. On that host it runs `codex app-server proxy` through the user's login shell and exchanges app-server frames over SSH. Submitted text and destination IDs cross that connection; the bridge can read loaded conversation metadata returned by the host. Message bodies are carried in the SSH stream, not inserted into its command line. Configured SSH discovery and sending stay on that selected host without a local fallback. The host and receiving application may retain submitted messages under their own policies.
 
 ## Local records
 
@@ -14,7 +16,9 @@ By default, state is stored under `~/.local/share/codex-claude-desktop-bridge` i
 
 - Outgoing message text, IDs, sender and destination identifiers, timestamps, fingerprints, delivery status, and available transport receipts/errors.
 - Conversation names, registry paths, and local routing addresses.
-- A Codex host-discovery record with recent local pipe addresses, context task IDs, and process metadata.
+- A Codex host-discovery record with recent local endpoint addresses, context task IDs, and process metadata.
+
+The local installer also saves a configured SSH alias in the staged MCP configuration. The alias identifies an operator-selected host; it is not an SSH credential.
 
 These are ordinary local JSON files, not application-level encrypted storage. The bridge does not implement automatic retention expiry or a message recall operation. Local delivery records remain until the bridge state is removed; messages already delivered to either application remain under that application's controls. Releases before 0.2.0 also stored one-to-one routing metadata; upgrading does not automatically erase those older local records.
 
@@ -24,7 +28,9 @@ To remove bridge records, stop its MCP processes and remove the intended bridge 
 
 ## Credentials and diagnostics
 
-Claude's delivery credential remains in Claude's own registration/key storage. The bridge reads the selected live session's credential when preparing a send, uses it in process memory, and does not intentionally persist it in bridge state or message text. Models do not receive a routing secret to copy between chats.
+Claude's delivery credential remains in Claude's own registration/key storage. The bridge reads the selected live session's credential when preparing a send, uses it in process memory, and does not intentionally persist it in bridge state or message text. Models do not receive a routing secret to copy between chats. macOS process verification reads process-start metadata through `ps`; it does not read the process's conversation contents.
+
+SSH credentials, host keys, and authentication agents remain under the user's SSH configuration and the SSH client's control. The bridge does not read or copy private keys, accept new host keys automatically, or weaken strict host-key verification. SSH diagnostics are drained without being copied verbatim into model-visible errors.
 
 The MCP server does not write a diagnostic log of tool arguments. Message text is nevertheless retained in the local delivery records described above and is returned by message/status tools. Applications may retain tool inputs, outputs, errors, and conversation history independently.
 

@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-desktop-bridge",
   "version": "0.3.3",
-  "description": "Send native messages between Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on native Windows.",
+  "description": "Message Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on Windows, with a configured SSH route on macOS.",
   "author": {
     "name": "KeeVeeG",
     "url": "https://github.com/KeeVeeG"
@@ -14,6 +14,7 @@
     "terminal",
     "messaging",
     "windows",
+    "macos",
     "mcp"
   ],
   "skills": "./skills/",
@@ -35,14 +36,15 @@
         "CODEX_CLAUDE_BRIDGE_STATE_DIR",
         "CODEX_CLAUDE_BRIDGE_REGISTRY_DIR",
         "CODEX_CLAUDE_BRIDGE_CODEX_BIN",
-        "CODEX_CLAUDE_BRIDGE_DAEMON"
+        "CODEX_CLAUDE_BRIDGE_DAEMON",
+        "CODEX_CLAUDE_BRIDGE_SSH_HOST"
       ]
     }
   },
   "interface": {
     "displayName": "Codex–Claude Desktop Bridge",
     "shortDescription": "Message Codex and Claude Code, in Desktop or a terminal.",
-    "longDescription": "Find local conversations and send text between Codex (Desktop tasks or terminal sessions) and Claude Code (CLI or Desktop Code sessions) on native Windows. Either side can start a conversation or reply.",
+    "longDescription": "Find conversations and send text between Codex (Desktop tasks or terminal sessions) and Claude Code (CLI or Desktop Code sessions). Windows uses native local transports. macOS supports Claude Unix inboxes and a configured Codex SSH host. Either side can start a conversation or reply.",
     "developerName": "KeeVeeG",
     "category": "Productivity",
     "capabilities": [

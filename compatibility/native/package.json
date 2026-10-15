@@ -13,7 +13,7 @@
   },
   "private": true,
   "type": "module",
-  "description": "Asynchronous native chat messages between Codex Desktop and Claude Code CLI or Desktop Code on Windows",
+  "description": "Asynchronous Codex and Claude Code messaging on Windows and through a configured SSH host on macOS",
   "engines": {
     "node": ">=20"
   },

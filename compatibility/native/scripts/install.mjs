@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { defaultStateDir, withStateLock } from '../lib/store.mjs';
+import { validateSshHostAlias } from '../lib/codex-ssh.mjs';
 import { PLUGIN_NAME, COMMON_RUNTIME_FILES, NATIVE_RUNTIME_FILES, checkManifests, compatibilityFiles } from './manifests.mjs';
 
 export { PLUGIN_NAME };
@@ -187,6 +188,8 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
   if (!codex && !claude) throw new Error('Select Codex, Claude, or both.');
   const root = fs.realpathSync(sourceRoot);
   const bundle = checkManifests(root, { checkNative: false });
+  const sshAlias = env.CODEX_CLAUDE_BRIDGE_SSH_HOST === undefined ? undefined
+    : validateSshHostAlias(env.CODEX_CLAUDE_BRIDGE_SSH_HOST);
   const pluginsDir = path.resolve(homeDir, 'plugins');
   const destination = path.join(pluginsDir, PLUGIN_NAME);
   const stateDir = path.resolve(defaultStateDir({ homeDir, env }));
@@ -201,6 +204,7 @@ export function prepareInstallation({ sourceRoot = projectRoot, homeDir = os.hom
   // Preserve the shared home-profile state despite application-specific MSIX
   // environments. Regenerate both native adapters from this pinned source.
   portableServer.env = { ...(portableServer.env ?? {}), CODEX_CLAUDE_BRIDGE_STATE_DIR: stateDir };
+  if (sshAlias !== undefined) portableServer.env.CODEX_CLAUDE_BRIDGE_SSH_HOST = sshAlias;
   const sources = COMMON_RUNTIME_FILES.map(relative => ({ relative, filename: checkedSource(root, relative) }));
   refuseLink(pluginsDir);
   refuseLink(destination);

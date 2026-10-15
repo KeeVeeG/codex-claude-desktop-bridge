@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   defaultStateDir, createSession, getSession, loadSession, readSession, updateSession,
@@ -292,6 +293,65 @@ test('direct message routes reject malformed endpoints and cannot mix with legac
   assert.throws(() => finishMessage(session, input.id, { route, pairId: 'old-pair', status: 'submitted' }), /cannot be combined/);
   assert.throws(() => getMessages(session, 20, 'old-pair', codex), /cannot be combined/);
   assert.throws(() => getMessages(session, 20, undefined, { ...codex, id: '' }), /must be nonempty/);
+});
+
+test('the same Codex UUID and message ID remain independent across local and configured SSH hosts', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'claude:host-routing' });
+  const from = { kind: 'claude', id: 'host-routing' };
+  const local = { from, to: { kind: 'codex', id: '4b7136a7-a344-4edb-90ea-297b56fd2a9c' } };
+  const remoteA = { from, to: { ...local.to, host_id: 'ssh:host-a' } };
+  const remoteB = { from, to: { ...local.to, host_id: 'ssh:host-b' } };
+  const input = { id: 'same-id', direction: 'to_codex', message: 'An independent delivery per host.' };
+  for (const route of [local, remoteA, remoteB]) assert.equal(recordMessage(session, { ...input, route }).created, true);
+  const localKey = `route:${createHash('sha256').update(JSON.stringify(local)).digest('hex')}:${input.id}`;
+  assert.deepEqual(readSession(session).messages[localKey].route, local, 'legacy local route shape and hash must remain unchanged');
+  finishMessage(session, input.id, { route: remoteA, status: 'submitted', receipt: { host_id: 'ssh:host-a' } });
+  finishMessage(session, input.id, { route: remoteB, status: 'uncertain' });
+  for (const [route, status] of [[local, 'sending'], [remoteA, 'submitted'], [remoteB, 'uncertain']]) {
+    const repeated = recordMessage(session, { ...input, route });
+    assert.equal(repeated.created, false);
+    assert.equal(repeated.message.status, status);
+    assert.deepEqual(repeated.message.route, route);
+  }
+  assert.equal(getMessages(session, 20, undefined, from).length, 3);
+  assert.throws(() => recordMessage(session, { ...input, route: remoteA, message: 'Changed text.' }), /different content/);
+  assert.throws(() => finishMessage(session, input.id, {
+    route: { from, to: { ...local.to, host_id: 'ssh:unknown-host' } }, status: 'submitted',
+  }), /does not belong/);
+});
+
+test('route hosts accept only bounded SSH aliases on Codex endpoints', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'route-host-validation' });
+  const from = { kind: 'claude', id: 'claude-caller' };
+  const to = { kind: 'codex', id: 'codex-recipient' };
+  const input = { id: 'host-validation', direction: 'to_codex', message: 'A bounded destination.' };
+  for (const host_id of [undefined, null, 1, '', 'local', 'ssh:', 'ssh:-option', 'ssh:user@host',
+    'ssh:host;command', 'ssh:host\n', 'ssh:host\r\n', `ssh:${'a'.repeat(129)}`]) {
+    const route = { from, to: { ...to, host_id } };
+    assert.throws(() => recordMessage(session, { ...input, route }), /Invalid message route host/);
+    assert.throws(() => finishMessage(session, input.id, { route, status: 'submitted' }), /Invalid message route host/);
+  }
+  for (const route of [
+    { from: { ...from, host_id: 'ssh:host' }, to },
+    { from, to: { ...to, host_id: 'ssh:host', extra: true } },
+  ]) assert.throws(() => recordMessage(session, { ...input, route }), /Invalid message route/);
+  const accepted = { from, to: { ...to, host_id: `ssh:${'a'.repeat(128)}` } };
+  assert.deepEqual(recordMessage(session, { ...input, route: accepted }).message.route, accepted);
+});
+
+test('sender history distinguishes a remote Codex identity from the same local UUID', async t => {
+  const setup = await fixture(t);
+  const session = createSession({ ...setup, threadId: 'codex-history-hosts' });
+  const local = { kind: 'codex', id: 'same-codex-uuid' };
+  const remote = { ...local, host_id: 'ssh:remote-host' };
+  const input = { id: 'same-id', direction: 'to_claude', message: 'A host-specific sender.',
+    route: { from: local, to: { kind: 'claude', id: 'claude-recipient' } } };
+  recordMessage(session, input);
+  recordMessage(session, { ...input, route: { ...input.route, from: remote } });
+  assert.deepEqual(getMessages(session, 20, undefined, local).map(record => record.route.from), [local]);
+  assert.deepEqual(getMessages(session, 20, undefined, remote).map(record => record.route.from), [remote]);
 });
 
 test('an in-flight outcome from a disconnected pair updates only its own partition', async t => {

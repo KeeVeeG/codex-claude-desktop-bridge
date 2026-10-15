@@ -88,26 +88,43 @@ test('the conversation panel and manual send are refused for terminal callers be
   }
 });
 
-const processStart = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-  `(Get-Process -Id ${process.pid}).StartTime.ToFileTimeUtc().ToString()`], { encoding: 'utf8', windowsHide: true }).stdout.trim();
+const nativeIdentitySupported = ['win32', 'darwin'].includes(process.platform);
+const claudeTest = (name, run) => test(name,
+  { skip: !nativeIdentitySupported && 'Verified native Claude process identity supports Windows and macOS.' }, run);
+const processDomain = process.platform === 'win32' ? `win32:${os.hostname().toLowerCase()}` : 'darwin';
+const keyStartField = process.platform === 'win32' ? 'procStartFt' : 'procStart';
+function readProcessStart() {
+  if (!nativeIdentitySupported) return 'unsupported-fixture-process';
+  const result = process.platform === 'win32'
+    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `(Get-Process -Id ${process.pid}).StartTime.ToFileTimeUtc().ToString()`], { encoding: 'utf8', windowsHide: true })
+    : spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(process.pid)],
+      { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } });
+  assert.equal(result.status, 0, `Cannot read fixture process creation time: ${result.error ?? result.stderr}`);
+  assert.ok(result.stdout.trim());
+  return result.stdout.trim();
+}
+const processStart = readProcessStart();
 
 async function claudeCallerSetup(t, scenario) {
   const daemon = await fakeDaemon(t, scenario);
   const registryDir = path.join(daemon.root, 'claude-registry');
   fs.mkdirSync(registryDir);
-  const socketPath = `\\\\.\\pipe\\LOCAL\\cc-msg-${randomUUID().replaceAll('-', '')}`;
+  const socketPath = process.platform === 'win32'
+    ? `\\\\.\\pipe\\LOCAL\\cc-msg-${randomUUID().replaceAll('-', '')}`
+    : `/tmp/cc-msg-${randomUUID()}.sock`;
   const record = { pid: process.pid, sessionId: randomUUID(), entrypoint: 'cli', procStart: processStart,
-    pidDomain: `win32:${os.hostname().toLowerCase()}`, messagingSocketPath: socketPath, cwd: daemon.cwd, name: 'Terminal Claude', version: '2.1.280', status: 'idle' };
+    pidDomain: processDomain, messagingSocketPath: socketPath, cwd: daemon.cwd, name: 'Terminal Claude', version: '2.1.280', status: 'idle' };
   fs.writeFileSync(path.join(registryDir, `${record.pid}.json`), JSON.stringify(record));
   const hash = createHash('sha256').update(canonicalClaudeSocket(socketPath)).digest('hex');
   fs.writeFileSync(path.join(registryDir, `${record.pid}.${hash}.key`),
-    JSON.stringify({ peerToken: '1'.repeat(32), procStartFt: processStart, pidDomain: record.pidDomain }));
+    JSON.stringify({ peerToken: '1'.repeat(32), [keyStartField]: processStart, pidDomain: record.pidDomain }));
   const context = { env: { CODEX_CLAUDE_BRIDGE_STATE_DIR: daemon.stateDir, CODEX_CLAUDE_BRIDGE_REGISTRY_DIR: registryDir },
     stateDir: daemon.stateDir, registryDir, parentPid: process.pid, daemon: daemon.daemon };
   return { ...daemon, registryDir, record, context };
 }
 
-test('Claude sends to a terminal Codex session with the peer envelope, with no Desktop registered at all', async t => {
+claudeTest('Claude sends to a terminal Codex session with the peer envelope, with no Desktop registered at all', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
   const result = await executeBridgeTool('send_to_codex', { thread_id: termId, message: 'Review please.', message_id: 'm-1' }, setup.context);
@@ -120,7 +137,7 @@ test('Claude sends to a terminal Codex session with the peer envelope, with no D
   assert.ok(start.params.input[0].text.includes('Review please.'));
 });
 
-test('an exact ID the daemon does not claim still goes to the Desktop path as before', async t => {
+claudeTest('an exact ID the daemon does not claim still goes to the Desktop path as before', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'other', originator: 'codex-tui' }] });
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'older-desktop-task', message: 'hi', message_id: 'm-2' }, setup.context),
     /Codex Desktop has not registered its bridge endpoint/);
@@ -129,13 +146,13 @@ test('an exact ID the daemon does not claim still goes to the Desktop path as be
     'the daemon was consulted for the ID before the Desktop path was taken');
 });
 
-test('with the daemon down an ID takes the Desktop path and terminal support never starts anything', async t => {
+claudeTest('with the daemon down an ID takes the Desktop path and terminal support never starts anything', async t => {
   const setup = await claudeCallerSetup(t, { unreachable: true });
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'any', message: 'hi', message_id: 'm-3' }, setup.context),
     /Codex Desktop has not registered its bridge endpoint/);
 });
 
-test('a dropped connection after turn/start is recorded uncertain and the same message_id is never sent twice', async t => {
+claudeTest('a dropped connection after turn/start is recorded uncertain and the same message_id is never sent twice', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }], dropAfter: 'turn/start' });
   const desktop = await desktopApp(t, setup, [{ id: termId, title: 'Also listed in Desktop' }]);
@@ -152,7 +169,7 @@ test('a dropped connection after turn/start is recorded uncertain and the same m
   assert.equal(status.messages.find(message => message.id === 'm-4').status, 'uncertain');
 });
 
-test('a busy terminal session is refused before any write and recorded failed', async t => {
+claudeTest('a busy terminal session is refused before any write and recorded failed', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui', status: { type: 'active' } }] });
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: termId, message: 'x', message_id: 'm-5' }, setup.context), /busy/);
@@ -161,7 +178,7 @@ test('a busy terminal session is refused before any write and recorded failed', 
   assert.equal(status.messages.find(message => message.id === 'm-5').status, 'failed');
 });
 
-test('repeating a submitted message_id sends nothing new, and the same ID to another recipient is a separate message', async t => {
+claudeTest('repeating a submitted message_id sends nothing new, and the same ID to another recipient is a separate message', async t => {
   const first = randomUUID();
   const second = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: first, originator: 'codex-tui' }, { id: second, originator: 'codex-tui' }] });
@@ -173,7 +190,7 @@ test('repeating a submitted message_id sends nothing new, and the same ID to ano
   assert.equal(setup.requests().filter(entry => entry.method === 'turn/start').length, 2);
 });
 
-test('a pre-aborted send contacts no daemon and records no message', async t => {
+claudeTest('a pre-aborted send contacts no daemon and records no message', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
   const controller = new AbortController();
@@ -204,7 +221,7 @@ async function desktopApp(t, setup, threads, { dropSend = false } = {}) {
   return { sent: () => sent };
 }
 
-test('a loaded Desktop-created conversation is sent through its daemon transport regardless of originator', async t => {
+claudeTest('a loaded Desktop-created conversation is sent through its daemon transport regardless of originator', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'desk-a', originator: 'Codex Desktop' }, { id: 'term-a', originator: 'codex-tui' }] });
   const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
   const result = await executeBridgeTool('send_to_codex', { thread_id: 'desk-a', message: 'hi', message_id: 'm-desk' }, setup.context);
@@ -214,7 +231,7 @@ test('a loaded Desktop-created conversation is sent through its daemon transport
   assert.equal(setup.requests().filter(entry => entry.method === 'turn/start').length, 1);
 });
 
-test('explicit Desktop delivery skips daemon routing and accepts a long message to a CLI-created conversation', async t => {
+claudeTest('explicit Desktop delivery skips daemon routing and accepts a long message to a CLI-created conversation', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'cli-created', originator: 'codex-tui', status: { type: 'notLoaded' } }] });
   const desktop = await desktopApp(t, setup, [{ id: 'cli-created', title: 'Now open in Desktop' }]);
   const queue = await fakeQueue(t);
@@ -227,7 +244,7 @@ test('explicit Desktop delivery skips daemon routing and accepts a long message 
   assert.deepEqual(queue.queueCalls(), []);
 });
 
-test('an uncertain Desktop send is never resent through terminal transport with the same message ID', async t => {
+claudeTest('an uncertain Desktop send is never resent through terminal transport with the same message ID', async t => {
   const threadId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: threadId, originator: 'codex-tui' }] });
   const desktop = await desktopApp(t, setup, [{ id: threadId, title: 'Shared target' }], { dropSend: true });
@@ -245,14 +262,14 @@ test('an uncertain Desktop send is never resent through terminal transport with 
   assert.equal(status.messages.find(message => message.id === 'desktop-uncertain').status, 'uncertain');
 });
 
-test('a terminal Claude sender is named as a terminal session in a Desktop Codex notice', async t => {
+claudeTest('a terminal Claude sender is named as a terminal session in a Desktop Codex notice', async t => {
   const setup = await claudeCallerSetup(t, { threads: [] });
   const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
   await executeBridgeTool('send_to_codex', { thread_id: 'desk-a', message: 'hi', message_id: 'm-label' }, setup.context);
   assert.match(desktop.sent()[0].arguments.prompt, /^\[From Claude Code CLI session "[0-9a-f-]+"; bridge message "m-label"\]/);
 });
 
-test('listing preserves Desktop entries on overlap and includes daemon-only conversations of either origin', async t => {
+claudeTest('listing preserves Desktop entries on overlap and includes daemon-only conversations of either origin', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'shared', originator: 'codex-tui', name: 'Shared' },
     { id: 'desk-a', originator: 'Codex Desktop' }, { id: 'term-b', originator: 'codex-tui', name: 'Terminal B' },
     { id: 'resumed-desktop', originator: 'Codex Desktop', name: 'Resumed from Desktop' }] });
@@ -263,7 +280,7 @@ test('listing preserves Desktop entries on overlap and includes daemon-only conv
   assert.equal(result.chats.find(chat => chat.thread_id === 'shared').title, 'Shared in Desktop');
 });
 
-test('a running daemon that does not answer the routing check refuses the send instead of guessing Desktop', async t => {
+claudeTest('a running daemon that does not answer the routing check refuses the send instead of guessing Desktop', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'term-a', originator: 'codex-tui' }], silent: 'thread/read' });
   const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
   const context = { ...setup.context, daemon: { ...setup.daemon, timeoutMs: 1500 } };
@@ -274,7 +291,7 @@ test('a running daemon that does not answer the routing check refuses the send i
   assert.equal(status.messages.some(message => message.id === 'm-wedged'), false);
 });
 
-test('a terminal Codex caller can send to a Claude session and the notice names its source', async t => {
+claudeTest('a terminal Codex caller can send to a Claude session and the notice names its source', async t => {
   const codexThread = randomUUID();
   const claude = await claudeCallerSetup(t, { threads: [{ id: codexThread, originator: 'codex-tui' }] });
   const received = [];
@@ -293,7 +310,7 @@ test('a terminal Codex caller can send to a Claude session and the notice names 
   assert.match(received.join(''), /From Codex terminal session/);
 });
 
-test('listing returns terminal chats with a warning when Desktop is not registered', async t => {
+claudeTest('listing returns terminal chats with a warning when Desktop is not registered', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'term-a', originator: 'codex-tui', name: 'Terminal A' }, { id: 'desk-a', originator: 'Codex Desktop' }] });
   const result = await executeBridgeTool('list_codex_chats', {}, setup.context);
   assert.deepEqual(result.chats.map(chat => [chat.thread_id, chat.source]), [['term-a', 'terminal'], ['desk-a', 'terminal']]);
@@ -301,13 +318,13 @@ test('listing returns terminal chats with a warning when Desktop is not register
   assert.match(result.warnings[0], /Codex Desktop unavailable/);
 });
 
-test('listing fails with both reasons when neither source is available', async t => {
+claudeTest('listing fails with both reasons when neither source is available', async t => {
   const setup = await claudeCallerSetup(t, { unreachable: true });
   await assert.rejects(() => executeBridgeTool('list_codex_chats', {}, setup.context),
     /Codex Desktop unavailable.*Codex terminal sessions unavailable/s);
 });
 
-test('bridge_doctor reports daemon reachability as optional and never fails a Desktop-only setup', async t => {
+claudeTest('bridge_doctor reports daemon reachability as optional and never fails a Desktop-only setup', async t => {
   const up = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }] });
   const upReport = await executeBridgeTool('bridge_doctor', {}, up.context);
   const daemonCheck = upReport.checks.find(check => check.name === 'codex_daemon');
@@ -322,14 +339,14 @@ test('bridge_doctor reports daemon reachability as optional and never fails a De
   assert.equal(downReport.ready, false);
 });
 
-test('bridge_doctor says so when the daemon is reachable but no terminal session is registered, and never reports it ready on that alone', async t => {
+claudeTest('bridge_doctor says so when the daemon is reachable but no terminal session is registered, and never reports it ready on that alone', async t => {
   const empty = await claudeCallerSetup(t, { threads: [] });
   const report = await executeBridgeTool('bridge_doctor', {}, empty.context);
   assert.match(report.checks.find(check => check.name === 'codex_daemon').detail, /no stored Codex session is available/);
   assert.equal(report.ready, false);
 });
 
-test('bridge_doctor warns when the Codex CLI and daemon versions differ and stays quiet when they match', async t => {
+claudeTest('bridge_doctor warns when the Codex CLI and daemon versions differ and stays quiet when they match', async t => {
   const setup = await claudeCallerSetup(t, { threads: [] });
   const versions = (cli, server) => ({ command: process.execPath, args: ['-e', `console.log(JSON.stringify({cliVersion:'${cli}',appServerVersion:'${server}'}))`] });
   const differ = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, daemonVersion: versions('0.160.0', '0.162.1') });
@@ -346,7 +363,7 @@ async function listenInbox(t, claude) {
   t.after(() => new Promise(resolve => server.close(resolve)));
 }
 
-test('bridge_doctor is ready for a terminal-only setup: daemon reachable, a session registered, live inbox', async t => {
+claudeTest('bridge_doctor is ready for a terminal-only setup: daemon reachable, a session registered, live inbox', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }] });
   await listenInbox(t, setup);
   const report = await executeBridgeTool('bridge_doctor', {}, setup.context);
@@ -355,7 +372,7 @@ test('bridge_doctor is ready for a terminal-only setup: daemon reachable, a sess
   assert.equal(report.ready, true, JSON.stringify(report.checks.filter(check => check.status === 'fail')));
 });
 
-test('bridge_doctor is not ready with a live inbox when the daemon has no terminal session or is unreachable', async t => {
+claudeTest('bridge_doctor is not ready with a live inbox when the daemon has no terminal session or is unreachable', async t => {
   const empty = await claudeCallerSetup(t, { threads: [] });
   await listenInbox(t, empty);
   const emptyReport = await executeBridgeTool('bridge_doctor', {}, empty.context);
@@ -370,7 +387,7 @@ test('bridge_doctor is not ready with a live inbox when the daemon has no termin
   assert.equal(downReport.ready, false);
 });
 
-test('a Claude caller is never verified as a terminal Codex caller, even with terminal Codex metadata', async t => {
+claudeTest('a Claude caller is never verified as a terminal Codex caller, even with terminal Codex metadata', async t => {
   const threadId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: threadId, originator: 'codex-tui' }] });
   const status = await executeBridgeTool('bridge_status', {}, { ...setup.context,
@@ -379,7 +396,7 @@ test('a Claude caller is never verified as a terminal Codex caller, even with te
   assert.deepEqual(setup.requests(), []);
 });
 
-test('bridge_doctor reports a codex.cmd shim as a warning instead of throwing', async t => {
+claudeTest('bridge_doctor reports a codex.cmd shim as a warning instead of throwing', async t => {
   const setup = await claudeCallerSetup(t, { threads: [] });
   const shim = path.join(setup.root, 'codex.cmd');
   fs.writeFileSync(shim, '');
@@ -390,7 +407,7 @@ test('bridge_doctor reports a codex.cmd shim as a warning instead of throwing', 
   assert.match(check.detail, /codex[.]exe/);
 });
 
-test('bridge_doctor does not hang on a daemon that never answers the thread list', async t => {
+claudeTest('bridge_doctor does not hang on a daemon that never answers the thread list', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: randomUUID(), originator: 'codex-tui' }], silent: 'thread/list' });
   const started = Date.now();
   const report = await executeBridgeTool('bridge_doctor', {}, setup.context);
@@ -398,7 +415,7 @@ test('bridge_doctor does not hang on a daemon that never answers the thread list
   assert.equal(report.checks.find(check => check.name === 'codex_daemon').status, 'warning');
 });
 
-test('an abort after the turn/start write is recorded uncertain', async t => {
+claudeTest('an abort after the turn/start write is recorded uncertain', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }], silent: 'turn/start' });
   const controller = new AbortController();
@@ -424,7 +441,7 @@ async function queueSetup(t, mode) {
   return { ...setup, termId, queueCalls: queue.queueCalls, context: { ...setup.context, queue: queue.queue } };
 }
 
-test('explicit terminal delivery reaches a notLoaded session through codex queue with the peer envelope', async t => {
+claudeTest('explicit terminal delivery reaches a notLoaded session through codex queue with the peer envelope', async t => {
   const setup = await queueSetup(t, 'ok');
   const result = await executeBridgeTool('send_to_codex', { thread_id: setup.termId, transport: 'terminal', message: 'Review please.', message_id: 'q-1' }, setup.context);
   assert.equal(result.message.status, 'submitted');
@@ -439,7 +456,7 @@ test('explicit terminal delivery reaches a notLoaded session through codex queue
   assert.ok(message.includes('Review please.'));
 });
 
-test('a queue failure with uncertain outcome is recorded uncertain and never sent twice', async t => {
+claudeTest('a queue failure with uncertain outcome is recorded uncertain and never sent twice', async t => {
   const setup = await queueSetup(t, 'fail');
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, transport: 'terminal', message: 'x', message_id: 'q-2' }, setup.context),
     error => error.deliveryUnknown === true);
@@ -450,7 +467,7 @@ test('a queue failure with uncertain outcome is recorded uncertain and never sen
   assert.equal(status.messages.find(message => message.id === 'q-2').status, 'uncertain');
 });
 
-test('an aborted queue send is recorded uncertain and never sent twice', async t => {
+claudeTest('an aborted queue send is recorded uncertain and never sent twice', async t => {
   const setup = await queueSetup(t, 'hang');
   const controller = new AbortController();
   const context = { ...setup.context, signal: controller.signal };
@@ -467,7 +484,7 @@ test('an aborted queue send is recorded uncertain and never sent twice', async t
   assert.equal(status.messages.find(message => message.id === 'q-3').status, 'uncertain');
 });
 
-test('a queue send Codex rejects as unknown is recorded failed', async t => {
+claudeTest('a queue send Codex rejects as unknown is recorded failed', async t => {
   const setup = await queueSetup(t, 'notfound');
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: setup.termId, transport: 'terminal', message: 'x', message_id: 'q-4' }, setup.context),
     error => !error.deliveryUnknown && /thread store/.test(error.message));
@@ -475,7 +492,7 @@ test('a queue send Codex rejects as unknown is recorded failed', async t => {
   assert.equal(status.messages.find(message => message.id === 'q-4').status, 'failed');
 });
 
-test('a message the queue route cannot carry is refused before its message_id is reserved', async t => {
+claudeTest('a message the queue route cannot carry is refused before its message_id is reserved', async t => {
   const setup = await queueSetup(t, 'ok');
   const send = (message, message_id) => executeBridgeTool('send_to_codex', { thread_id: setup.termId, transport: 'terminal', message, message_id }, setup.context);
   const overhead = codexPeerContent({ fromKind: 'claude', fromId: setup.record.sessionId, bridgeMessageId: 'q-edge', body: '' }).length;
@@ -492,7 +509,7 @@ test('a message the queue route cannot carry is refused before its message_id is
   assert.deepEqual((await executeBridgeTool('bridge_status', {}, setup.context)).messages.map(message => message.id), ['q-edge']);
 });
 
-test('auto routing refuses an unloaded conversation before reserving a message or writing to either transport', async t => {
+claudeTest('auto routing refuses an unloaded conversation before reserving a message or writing to either transport', async t => {
   const setup = await queueSetup(t, 'ok');
   const desktop = await desktopApp(t, setup, [{ id: setup.termId, title: 'Listed in Desktop too' }]);
   for (const transport of [undefined, 'auto']) {
@@ -507,7 +524,7 @@ test('auto routing refuses an unloaded conversation before reserving a message o
   assert.equal(sent.message.status, 'submitted', 'the refused message ID must remain reusable');
 });
 
-test('explicit terminal delivery queues a Desktop-created conversation by exact ID', async t => {
+claudeTest('explicit terminal delivery queues a Desktop-created conversation by exact ID', async t => {
   const threadId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: threadId, originator: 'Codex Desktop', status: { type: 'notLoaded' } }] });
   const desktop = await desktopApp(t, setup, [{ id: threadId, title: 'Historical Desktop entry' }]);
@@ -520,7 +537,7 @@ test('explicit terminal delivery queues a Desktop-created conversation by exact 
   assert.deepEqual(desktop.sent(), []);
 });
 
-test('auto routing never switches to queue when a loaded session unloads between routing and sending', async t => {
+claudeTest('auto routing never switches to queue when a loaded session unloads between routing and sending', async t => {
   const threadId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: threadId, originator: 'Codex Desktop',
     statusByRead: [{ type: 'idle' }, { type: 'notLoaded' }] }] });
@@ -536,7 +553,7 @@ test('auto routing never switches to queue when a loaded session unloads between
   assert.equal(status.messages.find(message => message.id === 'unloaded-race').status, 'failed');
 });
 
-test('explicit terminal delivery uses queue when the daemon is unavailable without falling back to Desktop', async t => {
+claudeTest('explicit terminal delivery uses queue when the daemon is unavailable without falling back to Desktop', async t => {
   const threadId = randomUUID();
   const setup = await claudeCallerSetup(t, { unreachable: true });
   const desktop = await desktopApp(t, setup, [{ id: threadId, title: 'Desktop candidate' }]);
@@ -549,7 +566,7 @@ test('explicit terminal delivery uses queue when the daemon is unavailable witho
   assert.deepEqual(desktop.sent(), []);
 });
 
-test('UUID casing cannot bypass message deduplication when explicit terminal delivery uses queue', async t => {
+claudeTest('UUID casing cannot bypass message deduplication when explicit terminal delivery uses queue', async t => {
   const threadId = '01a13000-abcd-7000-8000-000000000001';
   const setup = await claudeCallerSetup(t, { unreachable: true });
   const queue = await fakeQueue(t);
@@ -568,7 +585,7 @@ test('UUID casing cannot bypass message deduplication when explicit terminal del
   assert.equal(status.messages[0].route.to.id, threadId);
 });
 
-test('explicit terminal delivery with an unavailable daemon refuses a title instead of an exact UUID before reserving or queueing', async t => {
+claudeTest('explicit terminal delivery with an unavailable daemon refuses a title instead of an exact UUID before reserving or queueing', async t => {
   const setup = await claudeCallerSetup(t, { unreachable: true });
   const desktop = await desktopApp(t, setup, [{ id: 'same-name', title: 'Shared conversation name' }]);
   const queue = await fakeQueue(t);
@@ -579,7 +596,7 @@ test('explicit terminal delivery with an unavailable daemon refuses a title inst
   assert.deepEqual((await executeBridgeTool('bridge_status', {}, setup.context)).messages, []);
 });
 
-test('an invalid explicit transport is rejected without reserving a message or making a routing request', async t => {
+claudeTest('an invalid explicit transport is rejected without reserving a message or making a routing request', async t => {
   const setup = await claudeCallerSetup(t, { threads: [] });
   await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'other', transport: 'anything', message: 'hello', message_id: 'bad-transport' }, setup.context),
     /transport/i);
@@ -587,7 +604,7 @@ test('an invalid explicit transport is rejected without reserving a message or m
   assert.deepEqual((await executeBridgeTool('bridge_status', {}, setup.context)).messages, []);
 });
 
-test('an over-long message to a session on the daemon route is delivered, since only the queue route has the limit', async t => {
+claudeTest('an over-long message to a session on the daemon route is delivered, since only the queue route has the limit', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
   const queue = await fakeQueue(t, { mode: 'ok' });
@@ -599,7 +616,7 @@ test('an over-long message to a session on the daemon route is delivered, since 
   assert.equal(queue.queueCalls().length, 0);
 });
 
-test('a loaded idle daemon thread still goes through the daemon and makes no queue call', async t => {
+claudeTest('a loaded idle daemon thread still goes through the daemon and makes no queue call', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
   const queue = await fakeQueue(t, { mode: 'ok' });
@@ -617,7 +634,7 @@ test('shouldReportTerminalUnavailable hides only the missing-executable case for
   assert.equal(shouldReportTerminalUnavailable(new Error('The Codex executable was not found.'), true), true);
 });
 
-test('a systemError terminal session is refused and never queued', async t => {
+claudeTest('a systemError terminal session is refused and never queued', async t => {
   const termId = randomUUID();
   const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui', status: { type: 'systemError' } }] });
   const queue = await fakeQueue(t, { mode: 'ok' });
@@ -628,7 +645,7 @@ test('a systemError terminal session is refused and never queued', async t => {
   assert.equal(status.messages.find(message => message.id === 'q-6').status, 'failed');
 });
 
-test('listing with no Desktop and no Codex executable reports both reasons', async t => {
+claudeTest('listing with no Desktop and no Codex executable reports both reasons', async t => {
   const setup = await claudeCallerSetup(t, { threads: [] });
   const env = { ...setup.context.env, CODEX_CLAUDE_BRIDGE_DAEMON: '', CODEX_CLAUDE_BRIDGE_CODEX_BIN: '', PATH: '' };
   const { daemon, ...rest } = setup.context;

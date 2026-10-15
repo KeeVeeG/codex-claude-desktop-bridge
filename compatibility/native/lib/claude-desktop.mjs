@@ -1,9 +1,10 @@
 import { connect } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { canonicalLocalSocket } from './local-socket.mjs';
+import { assertClaudeProcessIdentity } from './claude-process.mjs';
 
 // Claude Code native inbox transport. The socket and authentication remain
 // stable across current releases; the peer envelope below follows the
@@ -38,12 +39,7 @@ function checkCancellation(signal) {
 }
 
 export function canonicalClaudeSocket(socketPath) {
-  if (typeof socketPath !== 'string' || /[\r\n\0]/.test(socketPath)) return null;
-  const match = /^[\\/]{2}[.?][\\/]pipe[\\/](?:(LOCAL)[\\/])?([^\\/]+)$/i.exec(socketPath);
-  if (!match || ['.', '..'].includes(match[2]) || /[. ]$/.test(match[2])) return null;
-  if (socketPath.startsWith('\\\\?\\') && socketPath.includes('/')) return null;
-  const name = `${match[1] ? 'LOCAL\\' : ''}${match[2]}`.replace(/[A-Z]/g, letter => letter.toLowerCase());
-  return `\\\\.\\pipe\\${name}`;
+  return canonicalLocalSocket(socketPath);
 }
 
 const canonicalPipe = canonicalClaudeSocket;
@@ -52,8 +48,7 @@ function checkEndpoint(socketPath) {
   if (typeof socketPath !== 'string' || !socketPath || /[\r\n\0]/.test(socketPath)) {
     throw new Error('Claude messaging socket is missing or invalid. Select the intended Claude Code session.');
   }
-  const localPipe = canonicalPipe(socketPath) !== null;
-  if (process.platform === 'win32' ? !localPipe : !localPipe && !isAbsolute(socketPath)) {
+  if (canonicalPipe(socketPath) === null) {
     throw new Error('Claude messaging endpoint must be a local named pipe on Windows or an absolute Unix socket path.');
   }
 }
@@ -143,20 +138,7 @@ function sameSessionIdentity(left, right) {
 }
 
 function assertProcessStart(record) {
-  if (process.platform !== 'win32') return;
-  const expectedDomain = `win32:${hostname().toLowerCase()}`;
-  if (record.pidDomain !== expectedDomain || !/^[0-9]+$/.test(record.procStart)) {
-    throw new Error('Claude session belongs to a different process namespace or has invalid creation metadata.');
-  }
-  // A numeric PID is validated above, and only its creation time is queried.
-  // No credential or endpoint is passed to the shell.
-  const result = spawnSync('powershell.exe', [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    `(Get-Process -Id ${record.pid} -ErrorAction Stop).StartTime.ToFileTimeUtc().ToString()`,
-  ], { encoding: 'utf8', windowsHide: true, timeout: 5_000, maxBuffer: 16_384 });
-  if (result.error || result.status !== 0 || result.stdout.trim() !== record.procStart) {
-    throw new Error('Claude session is offline or its process identity changed. Open the intended Code session again.');
-  }
+  assertClaudeProcessIdentity(record);
 }
 
 /** Resolve one live native Claude Code session. Its key is used only for identity checks
@@ -177,7 +159,7 @@ export function resolveClaudeSession(sessionId, { registryDir } = {}) {
     throw new Error('The chosen Claude session has no readable regular inbox key. Reopen that Code session.');
   }
   if (typeof key.peerToken !== 'string' || !/^[a-f0-9]{32}$/.test(key.peerToken) ||
-      key.procStartFt !== record.procStart || key.pidDomain !== record.pidDomain) {
+      (key.procStartFt ?? key.procStart) !== record.procStart || key.pidDomain !== record.pidDomain) {
     throw new Error('Claude inbox key does not match the selected session process.');
   }
   // Catch a restart or registry replacement that occurred during the key read.
