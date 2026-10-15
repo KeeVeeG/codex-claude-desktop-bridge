@@ -1,5 +1,7 @@
 # Codex Terminal Transport Implementation Plan
 
+Historical PR #3 implementation plan. The `dev` integration supersedes its originator-based identity and routing rules: see the [current README](../../../README.md#terminal-codex-sessions) for per-call caller identity, explicit transport selection, and queue restrictions. The steps below record the original work, not instructions for further changes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a terminal Codex CLI session (`codex` in PowerShell) exchange bridge messages with Claude Code sessions, next to the existing Codex Desktop support.

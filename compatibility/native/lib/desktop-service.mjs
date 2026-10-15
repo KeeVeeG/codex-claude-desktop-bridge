@@ -7,8 +7,8 @@ import { listCodexTools, listCodexChats, sendToCodex } from './codex-desktop.mjs
 import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
-import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, isTerminalThread, sendToTerminalThread,
-  queueToTerminalThread, queueRefusal, TerminalNotLoadedError, DaemonUnavailableError } from './codex-daemon.mjs';
+import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, sendToTerminalThread, normalizeCodexThreadId,
+  queueToTerminalThread, queueRefusal, queueTargetRefusal, TerminalNotLoadedError, DaemonUnavailableError } from './codex-daemon.mjs';
 import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
@@ -21,12 +21,12 @@ export function codexThreadId(metadata = {}) {
     metadata['codex/threadId'], metadata.codexThreadId, metadata.codex_thread_id, metadata.threadId,
     metadata.thread_id, metadata.thread?.id].filter(v => v !== undefined);
   if (candidates.some(v => typeof v !== 'string' || !v.trim())) throw new Error('Invalid Codex task identity in MCP metadata');
-  const identities = [...new Set(candidates)];
+  const identities = [...new Set(candidates.map(normalizeCodexThreadId))];
   if (identities.length > 1) throw new Error('Conflicting Codex task identities in MCP metadata');
   // A server can serve multiple tasks. Its startup CODEX_THREAD_ID identifies
   // the host context, not necessarily the task making this particular call.
   const threadId = identities[0];
-  if (!threadId) throw new Error('The calling Codex Desktop task identity is unavailable in this tool call.');
+  if (!threadId) throw new Error('The calling Codex task identity is unavailable in this tool call.');
   return threadId;
 }
 
@@ -69,33 +69,28 @@ async function withDaemon(config, signal, action, { timeoutMs } = {}) {
   try { return await action(connection); } finally { connection.close(); }
 }
 
-async function verifyTerminalCaller(threadId, config, signal) {
-  let thread;
-  const timeoutMs = probeTimeout(config);
-  try {
-    thread = await withDaemon(config, signal, connection => readTerminalThread(connection, threadId, { signal, timeoutMs }), { timeoutMs });
-  } catch (error) {
-    checkCancellation(signal);
-    throw new Error(`This Codex session did not provide Desktop app-tools, and the Codex daemon could not verify it as a terminal session: ${error.message}`);
-  }
-  if (!isTerminalThread(thread)) {
-    throw new Error('This Codex session is not a terminal session known to the Codex daemon, and no Desktop app-tools pipe was provided.');
-  }
-}
-
-/** False for a non-terminal ID; else whether the send will take the `codex queue` route (sendToTerminalThread's notLoaded case). */
-async function resolveTerminalTarget(threadId, config, signal) {
+/** Creation origin does not identify a thread's current client. A stored, unloaded
+ * thread needs an explicit transport; a loaded daemon thread is directly addressable. */
+async function resolveTerminalTarget(threadId, transport, config, signal) {
+  if (!['auto', 'desktop', 'terminal'].includes(transport)) throw new Error('Invalid Codex transport. Choose auto, desktop, or terminal.');
+  if (transport === 'desktop') return false;
   const timeoutMs = probeTimeout(config);
   try {
     const thread = await withDaemon(config, signal, connection => readTerminalThread(connection, threadId, { signal, timeoutMs }), { timeoutMs });
-    return isTerminalThread(thread) && { queueRoute: thread.status?.type === 'notLoaded' };
+    if (!thread) {
+      if (transport === 'terminal') throw new Error('The selected Codex session was not found in the Codex daemon thread store.');
+      return false;
+    }
+    const queueRoute = thread.status?.type === 'notLoaded';
+    if (queueRoute && transport === 'auto') throw new Error('The selected Codex session is not loaded in the daemon, so its current client cannot be determined. Set transport to desktop for Codex Desktop or terminal for Codex CLI. No message was sent.');
+    return { queueRoute, allowQueue: transport === 'terminal' };
   } catch (error) {
     checkCancellation(signal);
-    // No usable daemon (not installed, disabled, or not running): keep today's Desktop behavior for this ID.
-    if (error instanceof DaemonUnavailableError) return false;
-    // A running daemon that failed to answer cannot rule out a terminal session, and guessing
-    // Desktop would hand a terminal ID to the Desktop pipe. Refuse before anything is recorded.
-    throw new Error(`Could not check whether this Codex ID is a terminal session: ${error.message} Retry when the Codex daemon responds.`);
+    // Explicit terminal selection also supports a standalone CLI without a running daemon.
+    // The queue command still enforces the kill switch and validates the exact thread ID.
+    if (error instanceof DaemonUnavailableError) return transport === 'terminal'
+      ? { queueRoute: true, queueOnly: true, allowQueue: true } : false;
+    throw error;
   }
 }
 
@@ -109,7 +104,8 @@ async function identifyCaller(context, config) {
   }
   if (notClaude && hasCodexMetadata) {
     const threadId = codexThreadId(meta);
-    await verifyTerminalCaller(threadId, config, context.signal);
+    // The host supplies identity per call. Historical originator/source fields and
+    // daemon availability cannot verify which client currently owns this caller.
     return { kind: 'codex', transport: 'terminal', threadId };
   }
   const endpoint = resolveClaudeCaller({ registryDir: config.registryDir, parentPid: context.parentPid ?? process.ppid,
@@ -240,8 +236,8 @@ async function bridgeDoctor(context, config) {
     terminalSessions = (await withDaemon(doctorConfig, signal, connection => listTerminalThreads(connection, { limit: 1, signal, timeoutMs: 2000 }))).length;
     daemonReachable = true;
     add('codex_daemon', 'pass', terminalSessions
-      ? 'The Codex daemon is reachable and lists terminal sessions.'
-      : 'The Codex daemon is reachable, but no terminal Codex session is registered yet. Start `codex` in a terminal.');
+      ? 'The Codex daemon is reachable and lists stored Codex sessions. Their current client is not implied by discovery.'
+      : 'The Codex daemon is reachable, but no stored Codex session is available yet. Start a Codex conversation.');
   } catch (error) {
     checkCancellation(signal);
     add('codex_daemon', 'warning', `Terminal Codex sessions are unavailable: ${error.message}`);
@@ -373,10 +369,10 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
     try {
       const terminal = await withDaemon(config, context.signal, connection => listTerminalThreads(connection,
         { limit, signal: context.signal, timeoutMs: PROBE_TIMEOUT_MS }), { timeoutMs: PROBE_TIMEOUT_MS });
-      // The daemon positively identifies these as terminal sessions, matching the routing rule,
-      // so a terminal entry replaces a Desktop entry with the same ID.
-      const terminalIds = new Set(terminal.map(chat => chat.thread_id));
-      chats = [...chats.filter(chat => !terminalIds.has(chat.thread_id)), ...terminal];
+      // Source names describe discovery transports, not the thread's current client.
+      // Retain the Desktop title and metadata when both transports list the same ID.
+      const desktopIds = new Set(chats.map(chat => chat.thread_id));
+      chats = [...chats, ...terminal.filter(chat => !desktopIds.has(chat.thread_id))];
     } catch (error) {
       checkCancellation(context.signal);
       terminalFailed = true;
@@ -396,16 +392,17 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   if (name !== 'send_to_claude' && name !== 'send_to_codex') throw new Error('Unknown bridge tool');
   if ((name === 'send_to_claude') !== (who.kind === 'codex')) throw new Error(`Use ${who.kind === 'codex' ? 'send_to_claude' : 'send_to_codex'} from this application.`);
   const direction = who.kind === 'codex' ? 'to_claude' : 'to_codex';
+  const targetThreadId = direction === 'to_codex' ? normalizeCodexThreadId(args.thread_id) : null;
   const endpoint = direction === 'to_claude' ? resolveClaudeSession(args.session_id, { registryDir: config.registryDir }) : null;
-  const terminalTarget = direction === 'to_codex' ? await resolveTerminalTarget(args.thread_id, config, context.signal) : false;
+  const terminalTarget = direction === 'to_codex' ? await resolveTerminalTarget(targetThreadId, args.transport ?? 'auto', config, context.signal) : false;
   const host = direction === 'to_codex' && !terminalTarget ? await hostFor(who, config, context.signal) : null;
   const route = { from: sender(who), to: direction === 'to_claude'
     ? { kind: 'claude', id: endpoint.sessionId }
-    : { kind: 'codex', id: args.thread_id } };
+    : { kind: 'codex', id: targetThreadId } };
   const messageId = args.message_id ?? crypto.randomUUID();
   const peerText = terminalTarget ? codexPeerContent({ fromKind: 'claude', fromId: route.from.id, bridgeMessageId: messageId, body: args.message }) : undefined;
   // Refuse before recordMessage reserves the ID, so a message that can never be sent does not spend it as failed.
-  const queueRefused = terminalTarget?.queueRoute ? queueRefusal(peerText) : null;
+  const queueRefused = terminalTarget?.queueRoute ? queueTargetRefusal(targetThreadId) || queueRefusal(peerText) : null;
   if (queueRefused) throw new Error(queueRefused);
   checkCancellation(context.signal);
   const session = senderLedger(who, config, true);
@@ -432,11 +429,13 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
     } else if (terminalTarget) {
       let sent;
       try {
+        if (terminalTarget.queueOnly) throw new TerminalNotLoadedError('The daemon is unavailable for this explicit terminal route.');
         sent = await withDaemon(config, context.signal, connection => sendToTerminalThread(connection,
           { threadId: route.to.id, text: peerText, messageId: reserved.message.id, signal: context.signal }));
       } catch (error) {
         // Thrown before anything is written, so the queue fallback can never double-deliver.
         if (!(error instanceof TerminalNotLoadedError)) throw error;
+        if (!terminalTarget.allowQueue) throw new Error('The selected Codex session left the daemon before sending. No message was sent. Select desktop or terminal transport explicitly.');
         sent = await queueToTerminalThread({ threadId: route.to.id, text: peerText, env: config.env, signal: context.signal,
           ...(config.queue ?? {}) });
       }

@@ -47,6 +47,13 @@ function answer(request) {
   if (method === 'thread/read') {
     const thread = scenario.threads.find(item => item.id === params?.threadId);
     if (!thread) { send({ id, error: { code: -32600, message: `thread not found: ${params?.threadId}` } }); return; }
+    if (thread.statusByRead?.length) {
+      // Persist the sequence across proxy connections, as routing and sending
+      // deliberately open independent connections to the same fake daemon.
+      const reads = fs.readFileSync(scenario.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+        .filter(entry => entry.method === 'thread/read' && entry.params?.threadId === params.threadId).length;
+      thread.status = thread.statusByRead[Math.min(reads - 1, thread.statusByRead.length - 1)];
+    }
     send({ id, result: { thread: { ...publicThread(thread), ...(params.includeTurns ? { turns: thread.turns ?? [] } : {}) } } });
     return;
   }

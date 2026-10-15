@@ -280,6 +280,25 @@ test('list_claude_sessions output schema accepts terminal Claude Code sessions a
   assert.throws(() => assertSchema({ sessions: [session('unknown-cli')] }, tool.outputSchema, 'unknown entrypoint'));
 });
 
+test('MCP forwards explicit Codex transport and rejects unsupported choices before execution', async t => {
+  const calls = [];
+  const client = memoryMcp(t, async (name, args) => {
+    calls.push({ name, args });
+    return { message: { id: 'route-test', route: { from: { kind: 'claude', id: 'source' }, to: { kind: 'codex', id: 'target' } },
+      direction: 'to_codex', message: args.message, createdAt: 1, status: 'submitted', fingerprint: 'a'.repeat(64) } };
+  });
+  await initialize(client);
+  for (const transport of ['auto', 'desktop', 'terminal']) {
+    const response = await callTool(client, 'send_to_codex', { thread_id: 'target', message: 'Text.', transport });
+    assert.notEqual(response.result.isError, true);
+  }
+  for (const transport of ['queue', '', null, 1]) {
+    const response = await callTool(client, 'send_to_codex', { thread_id: 'target', message: 'Text.', transport });
+    assert.equal(response.result.isError, true);
+  }
+  assert.deepEqual(calls.map(call => call.args.transport), ['auto', 'desktop', 'terminal']);
+});
+
 test('MCP rejects invalid and reserved message IDs before invoking the executor', async t => {
   const calls = [];
   const client = memoryMcp(t, async (name, args) => {
@@ -496,7 +515,8 @@ test('MCP advertises direct, addressed messages without pair-management tools or
   for (const toolName of ['send_to_claude', 'send_to_codex']) {
     const schema = listed.result.tools.find(tool => tool.name === toolName).inputSchema;
     const targetField = toolName === 'send_to_claude' ? 'session_id' : 'thread_id';
-    assert.deepEqual(Object.keys(schema.properties).sort(), ['message', 'message_id', targetField].sort());
+    assert.deepEqual(Object.keys(schema.properties).sort(), ['message', 'message_id', targetField,
+      ...(toolName === 'send_to_codex' ? ['transport'] : [])].sort());
     assert.deepEqual(schema.required.sort(), ['message', targetField].sort());
     assert.ok(isToolFailure(await callTool(client, toolName, { message: 'Missing destination.' })));
     for (const field of ['files', 'connection', 'connection_token', 'request_id', 'timeout_seconds']) {

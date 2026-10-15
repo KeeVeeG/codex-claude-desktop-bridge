@@ -34,7 +34,7 @@ const claudeSession = schema({
   hostSessionId: { type: ['string', 'null'] }, procStart: outputText, pidDomain: outputText,
 }, ['sessionId', 'pid', 'name', 'cwd', 'status', 'version', 'entrypoint', 'hostSessionId', 'procStart', 'pidDomain']);
 const codexChat = schema({ thread_id: outputText, title: outputText, status: outputText,
-  cwd: outputText, host_id: outputText, source: { type: 'string', enum: ['desktop', 'terminal'] } }, ['thread_id', 'host_id']);
+  cwd: outputText, host_id: outputText, source: { type: 'string', enum: ['desktop', 'terminal'], description: 'Discovery transport only: Desktop app or terminal daemon store. Does not establish the current client or prove a session is open.' } }, ['thread_id', 'host_id']);
 const sendOutput = schema({ message: messageRecord, retransmitted: { type: 'boolean', const: false } }, ['message']);
 // Version the resource URI so hosts do not reuse an older panel layout.
 const panelUri = 'ui://bridge/panel-v4.html';
@@ -68,7 +68,7 @@ export const TOOLS = [
   {
     name: 'list_codex_chats',
     title: 'List Codex chats',
-    description: 'List safe titles and IDs of Codex conversations (Desktop tasks and terminal sessions, marked by source) so Claude can choose a chat to message. Does not send a message.',
+    description: 'List titles and exact IDs from Codex Desktop and the local daemon store. Source names the discovery transport, not the current client; stored sessions may be closed. Does not send a message.',
     inputSchema: schema({ limit: { type: 'integer', minimum: 1, maximum: MAX_CODEX_CHAT_LIMIT, description: 'Maximum number of recent app conversations to inspect for local Codex tasks. Pinned tasks are also included.' } }),
     outputSchema: schema({ chats: { type: 'array', items: codexChat }, warnings: { type: 'array', items: outputText } }, ['chats']),
     annotations: { readOnlyHint: true },
@@ -90,6 +90,7 @@ export const TOOLS = [
     description: 'Send a native visible message from this Claude session to any exact Codex Desktop task or terminal Codex session. Ask for work, reply to a message, or share information; no connection or acknowledgement is required.',
     inputSchema: schema({
       thread_id: textProperty('Exact destination Codex task ID, found with list_codex_chats or received in a prior message.'),
+      transport: { type: 'string', enum: ['auto', 'desktop', 'terminal'], description: 'Default auto uses a loaded daemon thread, otherwise Desktop when the daemon has no record or is unavailable. For a stored notLoaded thread, choose desktop for the Desktop app or terminal for Codex CLI/queue. Discovery source and creation origin do not prove the current client.' },
       message: messageText,
       message_id: messageId,
     }, ['thread_id', 'message']),

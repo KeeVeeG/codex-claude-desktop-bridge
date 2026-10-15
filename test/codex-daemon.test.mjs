@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DaemonUnavailableError, TerminalNotLoadedError, openDaemon, queueToTerminalThread, readDaemonVersions, scrubPaths } from '../lib/codex-daemon.mjs';
+import { randomUUID } from 'node:crypto';
+import { DaemonUnavailableError, TerminalNotLoadedError, openDaemon, queueTargetRefusal, queueToTerminalThread, readDaemonVersions, scrubPaths } from '../lib/codex-daemon.mjs';
 import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -122,7 +123,7 @@ test('a connection lost after a mutating request was written is delivery-unknown
     error => error.deliveryUnknown === true && /uncertain/.test(error.message));
 });
 
-import { isTerminalThread, listTerminalThreads, readTerminalThread, sendToTerminalThread } from '../lib/codex-daemon.mjs';
+import { listTerminalThreads, normalizeCodexThreadId, readTerminalThread, sendToTerminalThread } from '../lib/codex-daemon.mjs';
 
 const threads = [
   { id: 'desk-1', originator: 'Codex Desktop', name: 'Desktop chat' },
@@ -133,36 +134,102 @@ const threads = [
   { id: 'cold-1', originator: 'codex-tui', name: 'Cold', status: { type: 'notLoaded' } },
 ];
 
-test('listTerminalThreads keeps only terminal sessions, follows pagination, and honors the limit', async t => {
+test('listTerminalThreads discovers every origin, follows pagination, and honors the limit', async t => {
   const setup = await fakeDaemon(t, { threads, pageSize: 2 });
   const connection = await openDaemon({ ...setup.daemon });
   t.after(() => connection.close());
   const all = await listTerminalThreads(connection, { limit: 30 });
-  assert.deepEqual(all.map(chat => chat.thread_id), ['term-1', 'term-2', 'busy-1', 'cold-1']);
-  assert.deepEqual(all[0], { thread_id: 'term-1', title: 'Terminal one', status: 'idle', cwd: 'F:/repo', host_id: 'local', source: 'terminal' });
-  assert.equal(all[1].title, 'Preview only');
-  assert.deepEqual((await listTerminalThreads(connection, { limit: 2 })).map(chat => chat.thread_id), ['term-1', 'term-2']);
+  assert.deepEqual(all.map(chat => chat.thread_id), ['desk-1', 'term-1', 'exec-1', 'term-2', 'busy-1', 'cold-1']);
+  assert.deepEqual(all[1], { thread_id: 'term-1', title: 'Terminal one', status: 'idle', cwd: 'F:/repo', host_id: 'local', source: 'terminal' });
+  assert.equal(all[3].title, 'Preview only');
+  assert.deepEqual((await listTerminalThreads(connection, { limit: 2 })).map(chat => chat.thread_id), ['desk-1', 'term-1']);
+  assert.ok(setup.requests().filter(entry => entry.method === 'thread/list').every(entry => entry.params.sortKey === 'updated_at'));
 });
 
-test('readTerminalThread returns null for an unknown thread and isTerminalThread checks the originator', async t => {
+test('readTerminalThread returns null for an unknown thread and accepts threads created in either client', async t => {
   const setup = await fakeDaemon(t, { threads });
   const connection = await openDaemon({ ...setup.daemon });
   t.after(() => connection.close());
   assert.equal(await readTerminalThread(connection, 'nope'), null);
-  assert.equal(isTerminalThread(await readTerminalThread(connection, 'term-1')), true);
-  assert.equal(isTerminalThread(await readTerminalThread(connection, 'desk-1')), false);
-  assert.equal(isTerminalThread(null), false);
+  assert.equal((await readTerminalThread(connection, 'term-1')).id, 'term-1');
+  assert.equal((await readTerminalThread(connection, 'desk-1')).id, 'desk-1');
 });
 
-test('sendToTerminalThread starts a turn on an idle thread with exactly the allowed parameters', async t => {
+test('thread ID normalization changes only the casing of an exact UUID', () => {
+  const uuid = '01A13000-ABCD-7000-8000-000000000002';
+  assert.equal(normalizeCodexThreadId(uuid), uuid.toLowerCase());
+  for (const value of ['Term-1', 'Exact Chat Title', `${uuid}\n`, ` ${uuid}`, uuid.replaceAll('-', ''), null, undefined]) {
+    assert.equal(normalizeCodexThreadId(value), value);
+  }
+});
+
+test('daemon reads use canonical UUID identity and still reject a different UUID', async () => {
+  const uuid = '01A13000-ABCD-7000-8000-000000000002';
+  for (const returnedId of [uuid, uuid.toLowerCase()]) {
+    const connection = { async request(method, params) {
+      assert.equal(method, 'thread/read');
+      assert.equal(params.threadId, uuid.toLowerCase());
+      return { thread: { id: returnedId, status: { type: 'idle' } } };
+    } };
+    assert.equal((await readTerminalThread(connection, uuid)).id, uuid.toLowerCase());
+  }
+  const wrongThread = { async request() { return { thread: { id: randomUUID(), status: { type: 'idle' } } }; } };
+  await assert.rejects(() => readTerminalThread(wrongThread, uuid), /different thread/);
+});
+
+test('daemon sends normalize UUIDs for idle, active, and stale-steer fallback requests', async t => {
+  const uuid = '01A13000-ABCD-7000-8000-000000000002';
+  for (const state of ['idle', 'active', 'stale']) {
+    const setup = await fakeDaemon(t, { threads: [{ id: uuid.toLowerCase(), originator: 'Codex Desktop',
+      status: { type: state === 'idle' ? 'idle' : 'active' }, turns: [{ id: 'turn-live', status: 'inProgress' }],
+      becomesIdleAfterSteer: state === 'stale' }],
+    ...(state === 'stale' ? { errors: { 'turn/steer': { code: -32600, message: 'no active turn to steer' } } } : {}) });
+    const connection = await openDaemon({ ...setup.daemon });
+    t.after(() => connection.close());
+    const result = await sendToTerminalThread(connection, { threadId: uuid, text: 'hello', messageId: `m-${state}` });
+    assert.equal(result.method, state === 'active' ? 'turn/steer' : 'turn/start');
+    const threadRequests = setup.requests().filter(entry => entry.params?.threadId !== undefined);
+    assert.ok(threadRequests.length > 1);
+    assert.ok(threadRequests.every(entry => entry.params.threadId === uuid.toLowerCase()));
+  }
+});
+
+test('discovery includes an old resumed Desktop-created thread before newer inactive threads', async () => {
+  const stored = Array.from({ length: 60 }, (_, index) => ({
+    id: `new-${index}`, originator: 'codex-tui', createdAt: 100 + index, updatedAt: 100 + index,
+  }));
+  stored.push({ id: 'old-resumed', originator: 'Codex Desktop', createdAt: 1, updatedAt: 1000 });
+  const connection = { async request(method, params) {
+    assert.equal(method, 'thread/list');
+    const key = params.sortKey === 'updated_at' ? 'updatedAt' : 'createdAt';
+    const sorted = [...stored].sort((left, right) => right[key] - left[key]);
+    const offset = Number(params.cursor ?? 0);
+    return { data: sorted.slice(offset, offset + params.limit), nextCursor: String(offset + params.limit) };
+  } };
+  const chats = await listTerminalThreads(connection, { limit: 30 });
+  assert.equal(chats.length, 30);
+  assert.equal(chats[0].thread_id, 'old-resumed');
+});
+
+test('discovery stops after the bounded page count even if the daemon keeps returning a cursor', async () => {
+  let pages = 0;
+  const connection = { async request() { pages++; return { data: [], nextCursor: 'same-cursor' }; } };
+  assert.deepEqual(await listTerminalThreads(connection, { budgetMs: 60000 }), []);
+  assert.equal(pages, 40);
+});
+
+test('sendToTerminalThread starts an idle thread from either origin with exactly the allowed parameters', async t => {
   const setup = await fakeDaemon(t, { threads });
   const connection = await openDaemon({ ...setup.daemon });
   t.after(() => connection.close());
-  const result = await sendToTerminalThread(connection, { threadId: 'term-1', text: 'hello', messageId: 'msg-1' });
-  assert.deepEqual(result, { method: 'turn/start', turnId: 'turn-started' });
+  for (const threadId of ['term-1', 'desk-1']) {
+    const result = await sendToTerminalThread(connection, { threadId, text: 'hello', messageId: 'msg-1' });
+    assert.deepEqual(result, { method: 'turn/start', turnId: 'turn-started' });
+  }
   const sent = setup.requests().filter(entry => entry.method === 'turn/start');
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2);
   assert.deepEqual(sent[0].params, { threadId: 'term-1', input: [{ type: 'text', text: 'hello' }], clientUserMessageId: 'msg-1' });
+  assert.deepEqual(sent[1].params, { threadId: 'desk-1', input: [{ type: 'text', text: 'hello' }], clientUserMessageId: 'msg-1' });
   assert.equal(setup.requests().some(entry => /resume|inject_items/.test(entry.method)), false);
 });
 
@@ -170,11 +237,26 @@ test('a send that cannot start is refused before any write and is not delivery-u
   const setup = await fakeDaemon(t, { threads });
   const connection = await openDaemon({ ...setup.daemon });
   t.after(() => connection.close());
-  for (const [threadId, pattern] of [['desk-1', /not a terminal session/], ['missing', /not a terminal session/], ['cold-1', /not loaded/]]) {
+  for (const [threadId, pattern] of [['missing', /not found/], ['cold-1', /not loaded/]]) {
     await assert.rejects(() => sendToTerminalThread(connection, { threadId, text: 'x', messageId: 'm' }),
       error => pattern.test(error.message) && !error.deliveryUnknown, threadId);
   }
   assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
+});
+
+test('a mismatched daemon read cannot authorize a write to the selected thread', async () => {
+  for (const returnedId of ['different-thread', undefined]) {
+    const calls = [];
+    const connection = { async request(method, params) {
+      calls.push({ method, params });
+      return { thread: { id: returnedId, originator: 'codex-tui', status: { type: 'idle' } } };
+    } };
+    await assert.rejects(() => readTerminalThread(connection, 'selected'), /different thread/);
+    await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'selected', text: 'x', messageId: 'm' }),
+      error => /different thread/.test(error.message) && !error.deliveryUnknown);
+    assert.ok(calls.every(entry => entry.method === 'thread/read'));
+    assert.ok(calls.every(entry => entry.params.threadId === 'selected'));
+  }
 });
 
 test('a pre-acceptance message with the wrong code, and pre-write transport failures, are classified correctly', async t => {
@@ -222,8 +304,8 @@ const busyThreads = [
   { id: 'busy-noturn', originator: 'codex-tui', status: { type: 'active' }, turns: [{ id: 'turn-a', status: 'completed' }] },
 ];
 
-test('a busy terminal session is steered with the active turn id and no other parameters', async t => {
-  const setup = await fakeDaemon(t, { threads: busyThreads });
+test('a busy session created in Desktop is steered with the active turn id and no other parameters', async t => {
+  const setup = await fakeDaemon(t, { threads: busyThreads.map(thread => ({ ...thread, originator: 'Codex Desktop' })) });
   const connection = await openDaemon({ ...setup.daemon });
   t.after(() => connection.close());
   const result = await sendToTerminalThread(connection, { threadId: 'busy-turn', text: 'hello', messageId: 'm-steer' });
@@ -303,6 +385,31 @@ test('a stale steer on a thread that is still busy fails without delivery and wi
   assert.equal(setup.requests().some(entry => entry.method === 'turn/start'), false);
 });
 
+test('a stale steer cannot start a turn when the reread returns a different or unloaded thread', async () => {
+  for (const current of [
+    { id: 'different-thread', status: { type: 'idle' } },
+    { id: 'selected', status: { type: 'notLoaded' } },
+    null,
+  ]) {
+    const calls = [];
+    let reads = 0;
+    const connection = { async request(method, params) {
+      calls.push({ method, params });
+      if (method === 'thread/read') return { thread: ++reads === 1
+        ? { id: 'selected', originator: 'Codex Desktop', status: { type: 'active' } } : current };
+      if (method === 'thread/turns/list') return { data: [{ id: 'turn-1', status: 'inProgress' }] };
+      if (method === 'turn/steer') throw Object.assign(new Error('no active turn to steer'),
+        { rpcCode: -32600, rpcMessage: 'no active turn to steer' });
+      assert.fail(`Unexpected mutation: ${method}`);
+    } };
+    await assert.rejects(() => sendToTerminalThread(connection, { threadId: 'selected', text: 'x', messageId: 'm' }),
+      error => /different thread|changed turns/.test(error.message) && !error.deliveryUnknown);
+    assert.equal(reads, 2);
+    assert.equal(calls.filter(entry => entry.method === 'turn/steer').length, 1);
+    assert.equal(calls.some(entry => entry.method === 'turn/start'), false);
+  }
+});
+
 test('a codex.cmd shim is refused with a clear message instead of throwing from spawn', async t => {
   const fixture = await nativeFixture(t);
   const shim = path.join(fixture.root, 'codex.cmd');
@@ -359,25 +466,46 @@ test('a notLoaded thread is refused with TerminalNotLoadedError before any write
 });
 
 const QUEUE_ID = '01a13000-0000-7000-8000-000000000001';
+const QUEUE_TARGET_ID = randomUUID();
 
-test('queueToTerminalThread passes the exact arguments and returns the queue id', async t => {
+test('queueToTerminalThread canonicalizes UUIDs and preserves exact message arguments', async t => {
   const setup = await fakeQueue(t, { mode: 'ok' });
   const text = 'line one\nline "two" and \'three\' back\\slash "C:\\dir\\" a\\\\"b end\\' + '\nnext \u00e9\u4e2d\ud83d\ude00 100% $HOME';
-  const result = await queueToTerminalThread({ threadId: 'thr-1', text, ...setup.queue });
+  const result = await queueToTerminalThread({ threadId: QUEUE_TARGET_ID.toUpperCase(), text, ...setup.queue });
   assert.deepEqual(result, { method: 'queue', queueId: QUEUE_ID });
-  assert.deepEqual(setup.queueCalls().map(call => call.argv), [['queue', '--thread', 'thr-1', '--message', text]]);
+  assert.deepEqual(setup.queueCalls().map(call => call.argv), [['queue', '--thread', QUEUE_TARGET_ID, '--message', text]]);
+});
+
+test('queue targets must be exact UUIDs: titles, empty values, and options never start a process', async t => {
+  const setup = await fakeQueue(t, { mode: 'ok' });
+  for (const threadId of ['My chat title', '', ' ', '--last', '--thread=another', 'thr-1',
+    QUEUE_TARGET_ID.replaceAll('-', ''), ` ${QUEUE_TARGET_ID}`, `${QUEUE_TARGET_ID}\n`, null, undefined, 123]) {
+    assert.match(queueTargetRefusal(threadId), /exact session UUID/);
+    await assert.rejects(() => queueToTerminalThread({ threadId, text: 'x', ...setup.queue }),
+      error => /exact session UUID/.test(error.message) && !error.deliveryUnknown);
+  }
+  assert.equal(setup.queueCalls().length, 0);
+  assert.equal(queueTargetRefusal(QUEUE_TARGET_ID), null);
+  assert.equal(queueTargetRefusal(QUEUE_TARGET_ID.toUpperCase()), null);
+});
+
+test('queue accepts the canonical lowercase UUID reported for an uppercase input UUID', async () => {
+  const threadId = '01A13000-ABCD-7000-8000-000000000002';
+  const result = await queueToTerminalThread({ threadId, text: 'x', command: process.execPath,
+    args: ['-e', `console.log('Queued message ${QUEUE_ID} for thread ${threadId.toLowerCase()}.')`, '--'] });
+  assert.deepEqual(result, { method: 'queue', queueId: QUEUE_ID });
 });
 
 test('queueToTerminalThread classifies outcomes: clean failures versus uncertain delivery', async t => {
   const clean = [['notfound', /not found in the Codex thread store/]];
   for (const [mode, pattern] of clean) {
     const setup = await fakeQueue(t, { mode });
-    await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', ...setup.queue }),
+    await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', ...setup.queue }),
       error => pattern.test(error.message) && !error.deliveryUnknown, mode);
   }
   for (const mode of ['fail', 'garbage', 'wrongthread']) {
     const setup = await fakeQueue(t, { mode });
-    await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', ...setup.queue }),
+    await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', ...setup.queue }),
       error => error.deliveryUnknown === true && /Delivery is uncertain/.test(error.message), mode);
   }
 });
@@ -385,7 +513,7 @@ test('queueToTerminalThread classifies outcomes: clean failures versus uncertain
 test('a hanging queue process times out as uncertain and promptly', async t => {
   const setup = await fakeQueue(t, { mode: 'hang' });
   const started = Date.now();
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', timeoutMs: 400, ...setup.queue }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', timeoutMs: 400, ...setup.queue }),
     error => error.deliveryUnknown === true);
   assert.ok(Date.now() - started < 5000);
 });
@@ -393,7 +521,7 @@ test('a hanging queue process times out as uncertain and promptly', async t => {
 test('an abort after the queue process started is uncertain', async t => {
   const setup = await fakeQueue(t, { mode: 'hang' });
   const controller = new AbortController();
-  const pending = queueToTerminalThread({ threadId: 'thr-1', text: 'x', signal: controller.signal, ...setup.queue });
+  const pending = queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', signal: controller.signal, ...setup.queue });
   const outcome = assert.rejects(() => pending, error => error.deliveryUnknown === true);
   for (let i = 0; i < 200 && setup.queueCalls().length === 0; i++) await new Promise(r => setTimeout(r, 50));
   assert.equal(setup.queueCalls().length, 1);
@@ -403,30 +531,30 @@ test('an abort after the queue process started is uncertain', async t => {
 
 test('queue pre-spawn refusals never start a process and are not uncertain', async t => {
   const setup = await fakeQueue(t, { mode: 'ok' });
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x'.repeat(16001), ...setup.queue }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x'.repeat(16001), ...setup.queue }),
     error => /too long/.test(error.message) && !error.deliveryUnknown);
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'a\0b', ...setup.queue }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'a\0b', ...setup.queue }),
     error => /NUL character/.test(error.message) && !error.deliveryUnknown);
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', signal: controller.signal, ...setup.queue }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', signal: controller.signal, ...setup.queue }),
     error => error.name === 'AbortError' && !error.deliveryUnknown);
   assert.equal(setup.queueCalls().length, 0);
 });
 
 test('a queue executable that cannot start is a clean failure', async t => {
   const fixture = await nativeFixture(t);
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'thr-1', text: 'x', command: path.join(fixture.root, 'missing.exe') }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'x', command: path.join(fixture.root, 'missing.exe') }),
     error => error.message === 'The Codex executable could not be started.' && !error.deliveryUnknown);
 });
 
 test('the queue route honors the kill switch and refuses a codex.cmd shim', async t => {
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'x', text: 'y', env: { PATH: process.env.PATH } }),
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'y', env: { PATH: process.env.PATH } }),
     error => error instanceof DaemonUnavailableError && /disabled/.test(error.message));
   const fixture = await nativeFixture(t);
   const shim = path.join(fixture.root, 'codex.cmd');
   fs.writeFileSync(shim, '');
-  await assert.rejects(() => queueToTerminalThread({ threadId: 'x', text: 'y',
+  await assert.rejects(() => queueToTerminalThread({ threadId: QUEUE_TARGET_ID, text: 'y',
     env: { CODEX_CLAUDE_BRIDGE_CODEX_BIN: shim, CODEX_CLAUDE_BRIDGE_DAEMON: '' } }),
     error => error instanceof DaemonUnavailableError && /must point to codex\.exe/.test(error.message));
 });

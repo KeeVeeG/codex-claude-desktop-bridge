@@ -1,5 +1,7 @@
 # Codex terminal transport: design
 
+Historical PR #3 design. The `dev` integration supersedes originator-based identity and routing: creation metadata does not establish the current client. See the [current README](../../../README.md#terminal-codex-sessions) for the maintained behavior.
+
 Status: implemented on branch feature/terminal-sessions; live smoke findings are recorded below. Date: 2026-10-12. Where this design and the code differ, the code and the README are authoritative: the host registry gained no `kind` field, terminal listing pages `thread/list` without `thread/loaded/list`, and fresh terminal sessions report `source: "cli"`, not `"vscode"`.
 
 ## Purpose
