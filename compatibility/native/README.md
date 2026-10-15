@@ -203,7 +203,7 @@ npm test
 
 Tests use temporary registries, local IPC, and simulated application/SSH endpoints. They do not send messages to your live conversations or change application settings. Generated test artifacts stay under the ignored `work/` directory.
 
-Test files run sequentially because the lock-recovery stress tests already start multiple child processes. Windows CI checks Node.js 20, 22, 24, and 26 and builds the release package.
+Test files run sequentially because the lock-recovery stress tests already start multiple child processes. Windows and macOS CI check Node.js 20, 22, 24, and 26 and build the release package. Platform-specific tests are skipped only on the other operating system; CI uses simulated application endpoints, not live Claude or Codex accounts.
 
 The runtime has no npm dependencies. `lib/claude-desktop.mjs`, `lib/codex-desktop.mjs`, `lib/codex-daemon.mjs`, and `lib/codex-ssh.mjs` isolate the application-specific protocols, `lib/desktop-service.mjs` routes direct messages, and `lib/store.mjs` stores delivery records in the shared user-profile state directory.
 
