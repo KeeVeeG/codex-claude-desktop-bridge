@@ -72,6 +72,17 @@ test('canonical Agent Plugins metadata generates the checked-in native adapters 
   assert.equal(claude.plugins[0].source, './compatibility/native');
 });
 
+test('every manifest description says terminal sessions are supported, not Desktop only', () => {
+  const { manifest, files } = checkManifests(root);
+  const face = manifest.extensions['com.openai'].interface;
+  for (const text of [manifest.description, face.shortDescription, face.longDescription, ...face.defaultPrompt.slice(1, 2),
+    files['.codex-plugin/plugin.json'].description, files['.codex-plugin/plugin.json'].interface.longDescription,
+    files['.claude-plugin/plugin.json'].description]) assert.match(text, /terminal/i, text);
+  assert.ok(manifest.keywords.includes('terminal'));
+  const claude = JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin/marketplace.json'), 'utf8'));
+  for (const text of [claude.description, claude.plugins[0].description]) assert.match(text, /terminal/i, text);
+});
+
 test('portable configuration rejects native-only fields, unknown schemas, and reserved environment overrides', () => {
   const bundle = checkManifests(root);
   for (const mutate of [

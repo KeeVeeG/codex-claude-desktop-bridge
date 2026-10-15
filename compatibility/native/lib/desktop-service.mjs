@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,7 +8,7 @@ import { publishCodexHost, getCodexHosts } from './codex-host.mjs';
 import { defaultStateDir, createSession, getSession, recordMessage, finishMessage, getMessages } from './store.mjs';
 import { readComposerEnterBehavior } from './codex-settings.mjs';
 import { openDaemon, listTerminalThreads, readDaemonVersions, readTerminalThread, isTerminalThread, sendToTerminalThread,
-  queueToTerminalThread, TerminalNotLoadedError, DaemonUnavailableError } from './codex-daemon.mjs';
+  queueToTerminalThread, queueRefusal, TerminalNotLoadedError, DaemonUnavailableError } from './codex-daemon.mjs';
 import { codexPeerContent } from './codex-peer.mjs';
 
 export function codexThreadId(metadata = {}) {
@@ -82,11 +83,12 @@ async function verifyTerminalCaller(threadId, config, signal) {
   }
 }
 
+/** False for a non-terminal ID; else whether the send will take the `codex queue` route (sendToTerminalThread's notLoaded case). */
 async function resolveTerminalTarget(threadId, config, signal) {
   const timeoutMs = probeTimeout(config);
   try {
     const thread = await withDaemon(config, signal, connection => readTerminalThread(connection, threadId, { signal, timeoutMs }), { timeoutMs });
-    return isTerminalThread(thread);
+    return isTerminalThread(thread) && { queueRoute: thread.status?.type === 'notLoaded' };
   } catch (error) {
     checkCancellation(signal);
     // No usable daemon (not installed, disabled, or not running): keep today's Desktop behavior for this ID.
@@ -400,10 +402,15 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   const route = { from: sender(who), to: direction === 'to_claude'
     ? { kind: 'claude', id: endpoint.sessionId }
     : { kind: 'codex', id: args.thread_id } };
+  const messageId = args.message_id ?? crypto.randomUUID();
+  const peerText = terminalTarget ? codexPeerContent({ fromKind: 'claude', fromId: route.from.id, bridgeMessageId: messageId, body: args.message }) : undefined;
+  // Refuse before recordMessage reserves the ID, so a message that can never be sent does not spend it as failed.
+  const queueRefused = terminalTarget?.queueRoute ? queueRefusal(peerText) : null;
+  if (queueRefused) throw new Error(queueRefused);
   checkCancellation(context.signal);
   const session = senderLedger(who, config, true);
   checkCancellation(context.signal);
-  const reserved = recordMessage(session, { id: args.message_id, direction, message: args.message, route,
+  const reserved = recordMessage(session, { id: messageId, direction, message: args.message, route,
     manual: context.manual === true });
   if (!reserved.created) {
     if (reserved.message.status === 'failed') {
@@ -423,15 +430,14 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
       const notice = `[${source} ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       receipt = await sendToClaude({ ...endpoint, message: notice, senderName: senderLabel(route.from.id), signal: context.signal });
     } else if (terminalTarget) {
-      const text = codexPeerContent({ fromKind: 'claude', fromId: route.from.id, bridgeMessageId: reserved.message.id, body: args.message });
       let sent;
       try {
         sent = await withDaemon(config, context.signal, connection => sendToTerminalThread(connection,
-          { threadId: route.to.id, text, messageId: reserved.message.id, signal: context.signal }));
+          { threadId: route.to.id, text: peerText, messageId: reserved.message.id, signal: context.signal }));
       } catch (error) {
         // Thrown before anything is written, so the queue fallback can never double-deliver.
         if (!(error instanceof TerminalNotLoadedError)) throw error;
-        sent = await queueToTerminalThread({ threadId: route.to.id, text, env: config.env, signal: context.signal,
+        sent = await queueToTerminalThread({ threadId: route.to.id, text: peerText, env: config.env, signal: context.signal,
           ...(config.queue ?? {}) });
       }
       receipt = { status: 'written', method: sent.method, ...(sent.turnId ? { turn_id: sent.turnId } : {}),

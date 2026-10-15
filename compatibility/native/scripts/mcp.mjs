@@ -201,14 +201,18 @@ function validateArguments(args, tool) {
 function toolResult(value, isError = false, name) {
   const chatList = name === 'list_codex_chats' && !isError ? (Array.isArray(value) ? value : value?.chats) : undefined;
   const text = typeof value === 'string' ? value : JSON.stringify(chatList ?? value ?? null);
+  const warnings = chatList && value?.warnings?.length ? value.warnings : [];
   const structuredContent = name === 'list_claude_sessions' ? { sessions: value }
-    : name === 'list_codex_chats' ? { chats: chatList, ...(value?.warnings?.length ? { warnings: value.warnings } : {}) } : value;
+    : name === 'list_codex_chats' ? { chats: chatList, ...(warnings.length ? { warnings } : {}) } : value;
+  // A second block, so a client that parses the first block as the chats array still can, while one that
+  // shows every text block (and ignores structuredContent) sees why a source is missing.
+  const notes = warnings.length ? [{ type: 'text', text: `Warnings:\n${warnings.map(warning => `- ${warning}`).join('\n')}` }] : [];
   const panelMeta = !isError && name === 'bridge_panel' ? {
     ui: { resourceUri: panelUri },
     'ui/resourceUri': panelUri,
     'openai/outputTemplate': panelUri,
   } : undefined;
-  return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : { structuredContent }),
+  return { content: [{ type: 'text', text }, ...notes], ...(isError ? { isError: true } : { structuredContent }),
     ...(panelMeta ? { _meta: panelMeta } : {}) };
 }
 

@@ -10,6 +10,7 @@ import { canonicalClaudeSocket } from '../lib/claude-desktop.mjs';
 import { executeBridgeTool, shouldReportTerminalUnavailable } from '../lib/desktop-service.mjs';
 import { DaemonUnavailableError } from '../lib/codex-daemon.mjs';
 import { publishCodexHost } from '../lib/codex-host.mjs';
+import { codexPeerContent } from '../lib/codex-peer.mjs';
 import { fakeDaemon, fakeQueue } from './codex-daemon-helpers.mjs';
 import { encodeFrame, messageTool, mockPipe } from './native-helpers.mjs';
 
@@ -400,6 +401,35 @@ test('a queue send Codex rejects as unknown is recorded failed', async t => {
     error => !error.deliveryUnknown && /thread store/.test(error.message));
   const status = await executeBridgeTool('bridge_status', {}, setup.context);
   assert.equal(status.messages.find(message => message.id === 'q-4').status, 'failed');
+});
+
+test('a message the queue route cannot carry is refused before its message_id is reserved', async t => {
+  const setup = await queueSetup(t, 'ok');
+  const send = (message, message_id) => executeBridgeTool('send_to_codex', { thread_id: setup.termId, message, message_id }, setup.context);
+  const overhead = codexPeerContent({ fromKind: 'claude', fromId: setup.record.sessionId, bridgeMessageId: 'q-edge', body: '' }).length;
+  await assert.rejects(() => send('x'.repeat(16000 - overhead + 1), 'q-edge'), error => /too long/.test(error.message) && !error.deliveryUnknown);
+  await assert.rejects(() => send('a\0b', 'q-nul'), error => /NUL character/.test(error.message) && !error.deliveryUnknown);
+  assert.equal(setup.queueCalls().length, 0);
+  assert.deepEqual((await executeBridgeTool('bridge_status', {}, setup.context)).messages, [], 'nothing was reserved, not even as failed');
+  // The refused ID is still free, even for different text, and the wrapped text that exactly fits is accepted.
+  const fits = await send('x'.repeat(16000 - overhead), 'q-edge');
+  assert.equal(fits.message.status, 'submitted');
+  assert.equal(setup.queueCalls()[0].argv[setup.queueCalls()[0].argv.indexOf('--message') + 1].length, 16000);
+  // Without a message_id the refusal is just as clean.
+  await assert.rejects(() => send('x'.repeat(20000)), /too long/);
+  assert.deepEqual((await executeBridgeTool('bridge_status', {}, setup.context)).messages.map(message => message.id), ['q-edge']);
+});
+
+test('an over-long message to a session on the daemon route is delivered, since only the queue route has the limit', async t => {
+  const termId = randomUUID();
+  const setup = await claudeCallerSetup(t, { threads: [{ id: termId, originator: 'codex-tui' }] });
+  const queue = await fakeQueue(t, { mode: 'ok' });
+  const result = await executeBridgeTool('send_to_codex', { thread_id: termId, message: 'x'.repeat(40000), message_id: 'q-long' },
+    { ...setup.context, queue: queue.queue });
+  assert.equal(result.message.status, 'submitted');
+  assert.equal(result.message.receipt.method, 'turn/start');
+  assert.ok(setup.requests().find(entry => entry.method === 'turn/start').params.input[0].text.length > 40000);
+  assert.equal(queue.queueCalls().length, 0);
 });
 
 test('a loaded idle daemon thread still goes through the daemon and makes no queue call', async t => {

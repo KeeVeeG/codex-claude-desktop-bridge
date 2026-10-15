@@ -121,7 +121,7 @@ export function buildPackages({ sourceRoot = root, outputDir = path.join(root, '
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity',
     }] };
     const claudeCatalog = { name: catalogName, owner: { name: 'KeeVeeG' },
-      description: 'Asynchronous messages between Codex Desktop and Claude Desktop Code.',
+      description: 'Asynchronous messages between Codex and Claude Code, in Desktop or a terminal.',
       plugins: [{ name: PLUGIN_NAME, source: `./plugins/${PLUGIN_NAME}` }],
     };
     put(path.join(marketplaceSource, '.agents', 'plugins', 'marketplace.json'), json(codexCatalog));

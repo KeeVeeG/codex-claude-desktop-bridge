@@ -238,6 +238,32 @@ test('MCP structured results match advertised schemas while text JSON remains co
   assertSchema(warnedResponse.result.structuredContent, TOOLS.find(tool => tool.name === 'list_codex_chats').outputSchema, 'list_codex_chats');
 });
 
+test('list_codex_chats warnings also reach text-only clients in a second block, leaving the first block the chats array', async t => {
+  const chats = [{ thread_id: 'source', title: 'Codex', status: 'idle', host_id: 'local', source: 'desktop' }];
+  const warnings = ['Codex Desktop unavailable: no endpoint.', 'Codex terminal sessions unavailable: not running.'];
+  const warned = memoryMcp(t, async () => ({ chats, warnings }));
+  await initialize(warned);
+  const response = await callTool(warned, 'list_codex_chats', {});
+  assert.equal(response.result.content.length, 2);
+  assert.ok(response.result.content.every(block => block.type === 'text'));
+  assert.deepEqual(JSON.parse(response.result.content[0].text), chats);
+  assert.equal(response.result.content[1].text, `Warnings:\n${warnings.map(warning => `- ${warning}`).join('\n')}`);
+  assert.deepEqual(response.result.structuredContent, { chats, warnings });
+  for (const value of [{ chats, warnings: [] }, { chats }, chats]) {
+    const quiet = memoryMcp(t, async () => value);
+    await initialize(quiet);
+    const result = (await callTool(quiet, 'list_codex_chats', {})).result;
+    assert.equal(result.content.length, 1, JSON.stringify(value));
+    assert.deepEqual(JSON.parse(result.content[0].text), chats);
+    assert.equal(result.structuredContent.warnings, undefined);
+  }
+  const failing = memoryMcp(t, async () => { throw new Error('Codex Desktop unavailable: x'); });
+  await initialize(failing);
+  const failure = (await callTool(failing, 'list_codex_chats', {})).result;
+  assert.equal(failure.isError, true);
+  assert.equal(failure.content.length, 1);
+});
+
 test('list_claude_sessions output schema accepts terminal Claude Code sessions and rejects unknown entrypoints', () => {
   const tool = TOOLS.find(item => item.name === 'list_claude_sessions');
   const session = entrypoint => ({ sessionId: 'terminal', pid: 123, name: 'Claude', cwd: 'C:/project', status: 'idle',
