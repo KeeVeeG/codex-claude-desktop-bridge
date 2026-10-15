@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-desktop-bridge",
   "version": "0.3.3",
-  "description": "Send native messages between Codex Desktop tasks and Claude Code CLI or Desktop Code sessions on Windows.",
+  "description": "Send native messages between Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on native Windows.",
   "author": {
     "name": "KeeVeeG",
     "url": "https://github.com/KeeVeeG"
@@ -11,6 +11,7 @@
   "license": "MIT",
   "keywords": [
     "desktop",
+    "terminal",
     "messaging",
     "windows",
     "mcp"

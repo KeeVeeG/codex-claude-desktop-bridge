@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildPackages, zipEntries } from '../scripts/package.mjs';
 import { PLUGIN_NAME, PLUGIN_SCHEMA, MCP_SCHEMA, PORTABLE_RUNTIME_FILES, NATIVE_RUNTIME_FILES,
@@ -70,6 +70,17 @@ test('canonical Agent Plugins metadata generates the checked-in native adapters 
   assert.equal(catalog.plugins[0].source.path, './compatibility/native');
   const claude = JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin/marketplace.json'), 'utf8'));
   assert.equal(claude.plugins[0].source, './compatibility/native');
+});
+
+test('every manifest description says terminal sessions are supported, not Desktop only', () => {
+  const { manifest, files } = checkManifests(root);
+  const face = manifest.extensions['com.openai'].interface;
+  for (const text of [manifest.description, face.shortDescription, face.longDescription, ...face.defaultPrompt.slice(1, 2),
+    files['.codex-plugin/plugin.json'].description, files['.codex-plugin/plugin.json'].interface.longDescription,
+    files['.claude-plugin/plugin.json'].description]) assert.match(text, /terminal/i, text);
+  assert.ok(manifest.keywords.includes('terminal'));
+  const claude = JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin/marketplace.json'), 'utf8'));
+  for (const text of [claude.description, claude.plugins[0].description]) assert.match(text, /terminal/i, text);
 });
 
 test('portable configuration rejects native-only fields, unknown schemas, and reserved environment overrides', () => {
@@ -187,4 +198,20 @@ test('portable archive expands PLUGIN_ROOT to a cached Unicode installation and 
   assert.deepEqual(replies.find(reply => reply.id === 2).result.tools.map(tool => tool.name).sort(),
     ['bridge_doctor', 'bridge_panel', 'bridge_status', 'bridge_ui_history', 'bridge_ui_retry_notice', 'bridge_ui_send', 'list_claude_sessions', 'list_codex_chats', 'send_to_claude', 'send_to_codex']);
   assert.equal(fs.existsSync(path.join(directory, '.local/share', PLUGIN_NAME)), false, 'probe must not register a real app endpoint');
+});
+
+test('the generated native runtime starts and answers initialize, so every imported module is packaged', () => {
+  const script = fileURLToPath(new URL('../compatibility/native/scripts/mcp.mjs', import.meta.url));
+  const request = `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'packaging-test', version: '0' } } })}\n`;
+  const result = spawnSync(process.execPath, [script], { input: request, encoding: 'utf8', timeout: 15000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /"protocolVersion"/);
+});
+
+test('the generated native runtime can import the lazily loaded service graph, so every module it needs is packaged', () => {
+  const service = new URL('../compatibility/native/lib/desktop-service.mjs', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(service)});`],
+    { encoding: 'utf8', timeout: 15000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
 });

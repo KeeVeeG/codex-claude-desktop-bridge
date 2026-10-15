@@ -2,13 +2,13 @@
 
 [![Windows CI](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/KeeVeeG/codex-claude-desktop-bridge/actions/workflows/test.yml)
 
-Asynchronous, two-way messaging between **Codex Desktop** tasks and local **Claude Code CLI or Claude Desktop Code sessions** on native Windows. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
+Asynchronous, two-way messaging between **Codex** conversations (Desktop tasks or terminal sessions) and local **Claude Code CLI or Claude Desktop Code sessions** on native Windows. Messages appear in the selected conversations through ordinary MCP tools. Any Codex task can send to any available Claude Code session, and any Claude Code session can send to any available Codex task. Each side can share information, questions, tasks, or updates whenever useful. Replies and acknowledgements are optional; there is no task deadline or mandatory request/response cycle.
 
 Codex and Claude are peers. Either can start a conversation, ask the other to do something, exchange ideas, or share progress. The bridge carries text and leaves its meaning and purpose to the participants.
 
 ## Requirements
 
-- Native Windows, Codex Desktop, and a local Claude Code session in the terminal or Claude Desktop Code tab with a live messaging inbox.
+- Native Windows, Codex Desktop or a terminal Codex CLI, and a local Claude Code session in the terminal or Claude Desktop Code tab with a live messaging inbox. Claude Desktop is not required.
 - Node.js 20+ available on `PATH`.
 - The plugin's MCP server enabled and authorized normally in both applications.
 
@@ -51,7 +51,8 @@ After installation or an update, load the new tools in each client:
 
 - **Claude Code CLI:** the same `--claude` installation applies to terminal sessions using that Claude profile. Run `/reload-plugins`, then check the server in `/mcp`. If old tools remain, exit and resume the exact conversation with `claude --resume <session_id>`. See [Claude plugin loading](https://code.claude.com/docs/en/plugins/loading#check-which-stage-a-plugin-reached).
 - **Claude Desktop Code:** fully quit Claude Desktop, including any background instance, and reopen it when convenient. Plugin reload alone can leave its old MCP process running from the previous cache version.
-- **Codex:** start a new task or restart the app to load updated tools.
+- **Codex Desktop:** start a new task or restart the app to load updated tools.
+- **Codex CLI:** restart terminal Codex sessions when convenient to load updated tools.
 
 Authorize the MCP server through the normal prompts. The installer does not stop applications. `--prepare-only` and `--codex` leave Claude tool permissions unchanged. Run the installer again after updating this checkout; local build versions refresh both plugin caches without changing the source version.
 
@@ -68,7 +69,7 @@ Codex host discovery is registered when its MCP server starts with a valid Codex
 | Tool | Purpose |
 | --- | --- |
 | `list_claude_sessions` | List safe metadata for local Claude Code conversations. |
-| `list_codex_chats` | List local Codex conversation titles and IDs; optional `limit` is 1–50 recent app conversations. Pinned tasks are also included. |
+| `list_codex_chats` | List local Codex conversation titles and IDs, including terminal Codex sessions (`source: "terminal"`); optional `limit` is 1–50 recent app conversations, applied per source (so up to 2x entries are returned). Pinned tasks are also included. A source that fails is reported in `structuredContent.warnings` and, for clients that show only text, in a second text block after the chats array. |
 | `send_to_claude` | Send `message` to the exact `session_id`; optional `message_id` supports safe retry inspection. |
 | `send_to_codex` | Send `message` to the exact `thread_id`; optional `message_id` supports safe retry inspection. |
 | `bridge_status` | Inspect the caller's recent outgoing delivery records; optional `limit` is 1–100. |
@@ -116,6 +117,24 @@ Historical Claude Code conversations can appear without a live inbox. Their save
 
 An uncertain Claude delivery is never automatically retried. A notice failure after a successful Claude send does not cause the original message to be sent again. When the context notice failed definitively, the panel offers `bridge_ui_retry_notice`; this retries only the Codex notice and never the original Claude delivery. The panel uses MCP Apps resources and requires a host with native MCP Apps support. Opening `ui/bridge.html#demo` outside the host shows explicitly labelled fixture data for preview, with no live application access.
 
+### Terminal Claude Code sessions
+
+A `claude` session started in PowerShell or another terminal registers the same local inbox as a Desktop Code session, so it appears in `list_claude_sessions` and can send and receive like any other session. Install the plugin with the `claude` CLI (the local installer or the marketplace commands above); no Claude Desktop is needed. A project-level `.mcp.json` copy of the server is not a substitute, because `${CLAUDE_PLUGIN_ROOT}` is only defined for installed plugins.
+
+A terminal session is reachable only while its process is running. Closing the terminal ends its inbox, and its saved bridge history stays readable. Supported sessions under your user profile are addressable by exact session ID, the same trust boundary as Desktop sessions. The bridge accepts the `claude-desktop`, `cli`, and `sdk-cli` entrypoints; print-mode sessions such as `claude -p` must still be running. After installing or updating, use `/reload-plugins` and check `/mcp`; if old tools remain, exit and resume the exact conversation.
+
+### Terminal Codex sessions
+
+A `codex` session started in a terminal registers with Codex's local app-server daemon, so it appears in `list_codex_chats` with `source: "terminal"` next to Desktop tasks. Claude can send to it with `send_to_codex`, and it can send to Claude with `send_to_claude`.
+
+There are two delivery routes. A session attached to Codex's shared daemon (`status: "idle"` or `"active"`) gets a `turn/start`, or is steered if it is mid-turn. Every other terminal session except one in an error state (a session the daemon reports as `systemError` is refused), which includes most plain `codex` windows, is reached with `codex queue`: Codex delivers the message to an open session and holds it for a closed one, where nothing runs while it is closed. The bridge cannot tell the two apart, so `submitted` means queued with Codex, not read. The queue route has no message-id deduplication and a 16000-character limit on the wrapped text; the peer envelope adds a few hundred characters, so the usable message body is somewhat shorter. A message over the limit is refused before its `message_id` is recorded, so the ID stays usable; the daemon route has no such limit. A listed `status: "notLoaded"` does not mean closed (closed sessions are also `notLoaded`).
+
+A message arrives as a user turn wrapped in a peer notice that says it is collaborator context, not an instruction from the user. A session that is mid-turn is steered: the text appears inside the running turn without interrupting it. A busy session whose running turn cannot be identified or read is refused. The notice asks the receiving Codex to check with its user before consequential actions, so it may ask for confirmation where a Desktop task would act.
+
+The bridge never starts the daemon; if it is not reachable the terminal source is reported unavailable. The unavailable warning is not shown to Desktop-only users who do not have the Codex CLI installed. It is also hidden when `CODEX_CLAUDE_BRIDGE_CODEX_BIN` is mistyped, because the lookup then reports the executable as not found; `bridge_doctor` still reports it. If the daemon is running but does not answer the check of whether an ID is a terminal session, the send is refused rather than guessed onto the Desktop path. Set `CODEX_CLAUDE_BRIDGE_DAEMON=off` (or `0`, `false`, `no`) to disable terminal support, and set `CODEX_CLAUDE_BRIDGE_CODEX_BIN` to the path of `codex.exe` if it is not found automatically. The lookup takes a `codex.exe` on `PATH`, or follows the `codex.cmd` shim of an npm, pnpm, or Volta install to the vendored x64 or Windows ARM64 `codex.exe`; any other install needs the variable. Codex only forwards listed environment variables to plugin servers, which is why both are in the plugin's env list. The conversation panel and manual send stay Desktop-only. `bridge_doctor` reports the daemon, whether at least one terminal session is registered, and the CLI and daemon versions.
+
+Security: any process running as the same Windows user can reach the local daemon socket, the same trust boundary as the rest of the bridge. A peer message sent to a session running with approvals off could be acted on; the notice mitigates this but cannot guarantee it.
+
 ### Claude permissions
 
 In the Code tab, Claude's Auto mode may block `send_to_codex` as an external-system write before the bridge receives the call. The local installer adds a narrow user permission when installing Claude; direct marketplace installation requires adding the exact MCP tool through `/permissions`. If Auto blocks the call and no deny rule applies, select **Manual** from the mode selector beside the send button, retry, and approve the MCP tool prompt. Resolve a matching deny or managed policy through Claude's normal controls. A `Bash` rule does not apply to this tool. See [Claude Code permissions](https://code.claude.com/docs/en/permissions#mcp) and [Desktop permission modes](https://code.claude.com/docs/en/desktop#choose-a-permission-mode).
@@ -124,7 +143,9 @@ Terminal sessions use their own MCP permission prompts and `/permissions`; the D
 
 ## Compatibility
 
-Local validation has exercised the adapters with Claude Desktop 2.7032.0.0, Claude Code engine 2.1.284, Codex backend 0.155.0-alpha.16.3, and `codex-app-tools` 0.1.4. Interactive CLI registration and inbox compatibility were inspected with Claude Code 2.1.296. A real Claude Code 2.1.299 print-mode session in Bypass permissions received an authenticated native inbox message and replied through the bridge MCP server to a simulated Codex endpoint, preserving the exact source, recipient, and test nonce without changing the receiver's mode. That smoke test validates the live Claude side; it is not an end-to-end run against the real Codex Desktop UI or evidence that every inbound policy permits delivery. These are observed validation versions rather than a broad compatibility guarantee; private application interfaces can change in later releases.
+Local validation has exercised the adapters with Claude Desktop 2.7032.0.0, Claude Code engine 2.1.284, Codex backend 0.155.0-alpha.16.3, and `codex-app-tools` 0.1.4. Terminal Codex support was validated with Codex CLI and daemon 0.162.1. Interactive Claude CLI registration and inbox compatibility were inspected with Claude Code 2.1.296.
+
+A real Claude Code 2.1.299 print-mode session in Bypass permissions received an authenticated native inbox message and replied through the bridge MCP server to a simulated Codex endpoint, preserving the exact source, recipient, and test nonce without changing the receiver's mode. That smoke test validates the live Claude side; it is not an end-to-end run against the real Codex Desktop UI or evidence that every inbound policy permits delivery. These are observed validation versions rather than a broad compatibility guarantee; private application interfaces can change in later releases.
 
 The MCP server uses standard stdio. Native delivery uses private Windows interfaces in the two applications, so application updates may require adapter changes.
 
@@ -150,7 +171,7 @@ Tests use temporary registries and real local named pipes with simulated applica
 
 Test files run sequentially because the lock-recovery stress tests already start multiple child processes. Windows CI checks Node.js 20, 22, 24, and 26 and builds the release package.
 
-The runtime has no npm dependencies. `lib/claude-desktop.mjs` and `lib/codex-desktop.mjs` isolate the application-specific protocols, `lib/desktop-service.mjs` routes direct messages, and `lib/store.mjs` stores delivery records in the shared user-profile state directory.
+The runtime has no npm dependencies. `lib/claude-desktop.mjs`, `lib/codex-desktop.mjs`, and `lib/codex-daemon.mjs` isolate the application-specific protocols, `lib/desktop-service.mjs` routes direct messages, and `lib/store.mjs` stores delivery records in the shared user-profile state directory.
 
 Only connection attempts have short technical timeouts (10 seconds for Claude, up to 30 seconds for a Codex tool call). There is no timeout for a person or agent to answer a message.
 
