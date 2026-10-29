@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-claude-desktop-bridge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Message Codex (Desktop or terminal) and Claude Code (CLI or Desktop Code sessions) on Windows, with a configured SSH route on macOS.",
   "author": {
     "name": "KeeVeeG",
