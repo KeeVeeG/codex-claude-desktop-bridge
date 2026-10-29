@@ -38,7 +38,7 @@ const codexChat = schema({ thread_id: outputText, title: outputText, status: out
   cwd: outputText, host_id: outputText, source: { type: 'string', enum: ['desktop', 'terminal', 'ssh'], description: 'Discovery transport only: Desktop app, local daemon store, or configured SSH host. Local discovery does not establish the current client or prove a session is open.' } }, ['thread_id', 'host_id']);
 const sendOutput = schema({ message: messageRecord, retransmitted: { type: 'boolean', const: false } }, ['message']);
 // Version the resource URI so hosts do not reuse an older panel layout.
-const panelUri = 'ui://bridge/panel-v4.html';
+const panelUri = 'ui://bridge/panel-v5.html';
 // Claude-style orange starburst icon for the conversation-panel entrypoint.
 // Keep it self-contained because tool icons are data-URI images.
 const bridgeIconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none"><rect x="1" y="1" width="18" height="18" rx="4" fill="#D97757"/><g stroke="#FFF9F1" stroke-width=".85" stroke-linecap="round"><path d="M10 4v12M4 10h12M5.75 5.75l8.5 8.5M14.25 5.75l-8.5 8.5M7.2 4.8l5.6 10.4M12.8 4.8 7.2 15.2M4.8 7.2l10.4 5.6M4.8 12.8l10.4-5.6"/></g><circle cx="10" cy="10" r=".9" fill="#FFF9F1"/></svg>';
@@ -48,7 +48,7 @@ const bridgeIcon = {
   sizes: ['20x20'],
 };
 const conversation = schema({ session_id: outputText, title: outputText, cwd: outputText,
-  entrypoint: { type: 'string', enum: ['claude-desktop', 'cli', 'sdk-cli', 'claude-vscode'] },
+  entrypoint: { type: 'string', enum: [...CLAUDE_ENTRYPOINTS] },
   live: { type: 'boolean' }, last_activity_at: { type: ['integer', 'null'] },
   last_contact_at: { type: ['integer', 'null'] } }, ['session_id', 'title', 'cwd', 'live', 'last_activity_at', 'last_contact_at']);
 const uiMessage = schema({ id: outputText, direction: { type: 'string', enum: ['to_claude', 'to_codex'] },

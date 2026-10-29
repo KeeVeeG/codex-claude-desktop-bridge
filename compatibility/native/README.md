@@ -143,7 +143,7 @@ An uncertain Claude delivery is never automatically retried. A notice failure af
 
 A `claude` session started in PowerShell or another terminal registers the same local inbox as a Desktop Code session, so it appears in `list_claude_sessions` and can send and receive like any other session. Install the plugin with the `claude` CLI (the local installer or the marketplace commands above); no Claude Desktop is needed. A project-level `.mcp.json` copy of the server is not a substitute, because `${CLAUDE_PLUGIN_ROOT}` is only defined for installed plugins.
 
-A terminal session is reachable only while its process is running. Closing the terminal ends its inbox, and its saved bridge history stays readable. Supported sessions under your user profile are addressable by exact session ID, the same trust boundary as Desktop sessions. The bridge accepts the `claude-desktop`, `cli`, and `sdk-cli` entrypoints; print-mode sessions such as `claude -p` must still be running. After installing or updating, use `/reload-plugins` and check `/mcp`; if old tools remain, exit and resume the exact conversation.
+A terminal session is reachable only while its process is running. Closing the terminal ends its inbox, and its saved bridge history stays readable. Supported sessions under your user profile are addressable by exact session ID, the same trust boundary as Desktop sessions. The bridge accepts the `claude-desktop`, `cli`, `sdk-cli`, and `claude-vscode` entrypoints; print-mode sessions such as `claude -p` must still be running. After installing or updating, use `/reload-plugins` and check `/mcp`; if old tools remain, exit and resume the exact conversation.
 
 ### Windows terminal Codex sessions
 

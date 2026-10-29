@@ -304,7 +304,7 @@
     renderChats(); renderConversation({ preserveTimeline: true });
   }
   function clientLabel(chat) {
-    return chat.entrypoint === 'cli' ? 'Claude CLI' : chat.entrypoint === 'sdk-cli' ? 'Claude CLI (print)' : chat.entrypoint === 'claude-desktop' ? 'Claude Desktop' : 'Claude Code';
+    return chat.entrypoint === 'cli' ? 'Claude CLI' : chat.entrypoint === 'sdk-cli' ? 'Claude CLI (print)' : chat.entrypoint === 'claude-desktop' ? 'Claude Desktop' : chat.entrypoint === 'claude-vscode' ? 'Claude VS Code' : 'Claude Code';
   }
   function renderChats() {
     const active = document.activeElement;

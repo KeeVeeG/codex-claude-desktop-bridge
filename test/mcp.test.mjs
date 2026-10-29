@@ -201,7 +201,7 @@ test('MCP structured results match advertised schemas while text JSON remains co
     createdAt: 1, updatedAt: 2, senderPid: 123, status: 'submitted', fingerprint: 'a'.repeat(64),
     receipt: { status: 'written', messageId: 'native-id', acknowledged: false } };
   const values = {
-    list_claude_sessions: ['claude-desktop', 'cli', 'sdk-cli'].map((entrypoint, index) => ({ sessionId: `recipient-${index}`,
+    list_claude_sessions: ['claude-desktop', 'cli', 'sdk-cli', 'claude-vscode'].map((entrypoint, index) => ({ sessionId: `recipient-${index}`,
       pid: 123 + index, name: 'Claude', cwd: 'C:/project', status: 'idle', version: '2.1.299', entrypoint,
       hostSessionId: null, procStart: '123', pidDomain: 'win32:test' })),
     list_codex_chats: ['desktop', 'terminal'].map((source, index) => ({ thread_id: `source-${index}`,
@@ -211,7 +211,7 @@ test('MCP structured results match advertised schemas while text JSON remains co
     bridge_status: { application: 'codex', sender_id: 'source', state_directory: 'C:/state', messages: [record], note: 'Submitted.', plugin_version: 'test' },
     bridge_doctor: { application: 'unknown', ready: false, checks: [{ name: 'caller', status: 'fail', detail: 'No verified sender.' }], plugin_version: 'test' },
     bridge_panel: { owner_thread_id: 'source', application: 'codex', chats: [
-      ...['claude-desktop', 'cli', 'sdk-cli'].map((entrypoint, index) => ({ session_id: `recipient-${index}`, entrypoint,
+      ...['claude-desktop', 'cli', 'sdk-cli', 'claude-vscode'].map((entrypoint, index) => ({ session_id: `recipient-${index}`, entrypoint,
         title: 'Claude', cwd: 'C:/project', live: true, last_activity_at: 2, last_contact_at: 1 })),
       { session_id: 'archived-recipient', title: 'Archived Claude', cwd: 'C:/project', live: false,
         last_activity_at: 1, last_contact_at: 1 },

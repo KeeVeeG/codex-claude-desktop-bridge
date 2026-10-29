@@ -106,14 +106,14 @@ function readProcessStart() {
 }
 const processStart = readProcessStart();
 
-async function claudeCallerSetup(t, scenario) {
+async function claudeCallerSetup(t, scenario, { entrypoint = 'cli' } = {}) {
   const daemon = await fakeDaemon(t, scenario);
   const registryDir = path.join(daemon.root, 'claude-registry');
   fs.mkdirSync(registryDir);
   const socketPath = process.platform === 'win32'
     ? `\\\\.\\pipe\\LOCAL\\cc-msg-${randomUUID().replaceAll('-', '')}`
     : `/tmp/cc-msg-${randomUUID()}.sock`;
-  const record = { pid: process.pid, sessionId: randomUUID(), entrypoint: 'cli', procStart: processStart,
+  const record = { pid: process.pid, sessionId: randomUUID(), entrypoint, procStart: processStart,
     pidDomain: processDomain, messagingSocketPath: socketPath, cwd: daemon.cwd, name: 'Terminal Claude', version: '2.1.280', status: 'idle' };
   fs.writeFileSync(path.join(registryDir, `${record.pid}.json`), JSON.stringify(record));
   const hash = createHash('sha256').update(canonicalClaudeSocket(socketPath)).digest('hex');
@@ -262,11 +262,11 @@ claudeTest('an uncertain Desktop send is never resent through terminal transport
   assert.equal(status.messages.find(message => message.id === 'desktop-uncertain').status, 'uncertain');
 });
 
-claudeTest('a terminal Claude sender is named as a terminal session in a Desktop Codex notice', async t => {
-  const setup = await claudeCallerSetup(t, { threads: [] });
+for (const [entrypoint, client] of [['cli', 'Claude Code CLI'], ['claude-vscode', 'Claude Code VS Code']]) claudeTest(`a ${entrypoint} Claude sender is named as ${client} in a Desktop Codex notice`, async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] }, { entrypoint });
   const desktop = await desktopApp(t, setup, [{ id: 'desk-a', title: 'Desktop A' }]);
   await executeBridgeTool('send_to_codex', { thread_id: 'desk-a', message: 'hi', message_id: 'm-label' }, setup.context);
-  assert.match(desktop.sent()[0].arguments.prompt, /^\[From Claude Code CLI session "[0-9a-f-]+"; bridge message "m-label"\]/);
+  assert.match(desktop.sent()[0].arguments.prompt, new RegExp(`^\\[From ${client} session "[0-9a-f-]+"; bridge message "m-label"\\]`));
 });
 
 claudeTest('listing preserves Desktop entries on overlap and includes daemon-only conversations of either origin', async t => {

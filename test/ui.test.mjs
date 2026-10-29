@@ -76,6 +76,8 @@ test('panel distinguishes live CLI and Desktop recipients while preserving exact
   const chats = panel.chats.map(chat => ({ ...chat,
     ...(chat.session_id === 'a' ? { entrypoint: 'cli' } : chat.session_id === 'b' ? { entrypoint: 'claude-desktop' }
       : chat.session_id === 'd' ? { entrypoint: 'sdk-cli' } : {}) }));
+  chats.push({ session_id: 'e', title: 'Editor session', cwd: 'C:/projects/editor', live: true, last_contact_at: null,
+    last_activity_at: 500, entrypoint: 'claude-vscode' });
   h.emit({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { ...panel, chats } } });
   await flush();
   const cli = h.node('chat-list').children.find(node => node.dataset.sessionId === 'a');
@@ -86,6 +88,8 @@ test('panel distinguishes live CLI and Desktop recipients while preserving exact
   h.node('tab-all').dispatch('click'); await flush();
   const print = h.node('chat-list').children.find(node => node.dataset.sessionId === 'd');
   assert.match(print.textContent, /Claude CLI \(print\)/);
+  const editor = h.node('chat-list').children.find(node => node.dataset.sessionId === 'e');
+  assert.match(editor.textContent, /Claude VS Code/);
   await h.choose('a');
   assert.match(h.node('conversation-subtitle').textContent, /Claude CLI/);
   h.node('message').value = 'CLI recipient message'; h.node('message').dispatch('input');
