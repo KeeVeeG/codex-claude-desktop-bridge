@@ -62,7 +62,7 @@ test('Claude discovery includes CLI and SDK CLI alongside Desktop and exposes on
   const setup = await fixture(t);
   const desktop = { ...setup.record, pid: process.ppid, sessionId: randomUUID(), entrypoint: 'claude-desktop' };
   fs.writeFileSync(path.join(setup.registryDir, `${desktop.pid}.json`), JSON.stringify(desktop));
-  for (const entrypoint of ['cli', 'sdk-cli']) {
+  for (const entrypoint of ['cli', 'sdk-cli', 'claude-vscode']) {
     setup.rewrite({ entrypoint });
     const sessions = discoverClaudeSessions({ registryDir: setup.registryDir });
     assert.equal(sessions.length, 2);
