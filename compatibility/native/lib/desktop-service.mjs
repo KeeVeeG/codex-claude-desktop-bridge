@@ -480,7 +480,8 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
       const delivered = await sendToCodex({ ...ssh, threadId: route.to.id, message: peerText, signal: context.signal });
       receipt = { ...delivered, host_id: route.to.host_id };
     } else {
-      const client = who.endpoint.entrypoint === 'claude-desktop' ? 'Claude Desktop' : 'Claude Code CLI';
+      const entrypoint = who.endpoint.entrypoint;
+      const client = entrypoint === 'claude-desktop' ? 'Claude Desktop' : entrypoint === 'claude-vscode' ? 'Claude Code VS Code' : 'Claude Code CLI';
       const notice = `[From ${client} session ${JSON.stringify(route.from.id)}; bridge message ${JSON.stringify(reserved.message.id)}]\n\n${args.message}`;
       await sendToCodex({ pipePath: host.pipePath, contextThreadId: host.threadId,
         threadId: route.to.id, message: notice, signal: context.signal });

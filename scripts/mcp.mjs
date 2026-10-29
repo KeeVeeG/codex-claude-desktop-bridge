@@ -48,7 +48,7 @@ const bridgeIcon = {
   sizes: ['20x20'],
 };
 const conversation = schema({ session_id: outputText, title: outputText, cwd: outputText,
-  entrypoint: { type: 'string', enum: ['claude-desktop', 'cli', 'sdk-cli'] },
+  entrypoint: { type: 'string', enum: ['claude-desktop', 'cli', 'sdk-cli', 'claude-vscode'] },
   live: { type: 'boolean' }, last_activity_at: { type: ['integer', 'null'] },
   last_contact_at: { type: ['integer', 'null'] } }, ['session_id', 'title', 'cwd', 'live', 'last_activity_at', 'last_contact_at']);
 const uiMessage = schema({ id: outputText, direction: { type: 'string', enum: ['to_claude', 'to_codex'] },
