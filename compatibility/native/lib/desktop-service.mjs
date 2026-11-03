@@ -160,11 +160,18 @@ function senderLedger(who, config, create = false) {
   return createSession({ stateDir: config.stateDir, threadId, cwd: config.stateDir });
 }
 
-async function hostFor(who, config, signal) {
+async function hostFor(who, config, signal, targetThreadId) {
   checkCancellation(signal);
   if (who.kind === 'codex' && who.transport === 'desktop') return { pipePath: who.pipePath, threadId: who.threadId };
-  const hosts = getCodexHosts({ stateDir: config.stateDir });
-  if (hosts.length === 0) throw new Error('Codex Desktop has not registered its bridge endpoint yet. Open Codex with the plugin enabled, or run the installer from an open Codex task.');
+  const registered = getCodexHosts({ stateDir: config.stateDir });
+  if (registered.length === 0) throw new Error('Codex Desktop has not registered its bridge endpoint yet. Open Codex with the plugin enabled, or run the installer from an open Codex task.');
+  // External replies need the target's genuine registered context. A newer
+  // native child's discovery capability does not authorize sending to its ancestor.
+  const hosts = targetThreadId === undefined ? registered
+    : registered.filter(host => normalizeCodexThreadId(host.threadId) === targetThreadId);
+  if (hosts.length === 0) {
+    throw new Error('No registered Desktop context matches the selected Codex task. Ask that exact task to send an authorized bridge message first. No message was sent.');
+  }
   let lastError;
   for (const host of hosts) {
     try {
@@ -430,7 +437,8 @@ export async function executeBridgeTool(name, args = {}, context = {}) {
   if (!ssh && direction === 'to_codex' && transport === 'ssh') throw new Error('SSH delivery requires CODEX_CLAUDE_BRIDGE_SSH_HOST on macOS.');
   const endpoint = direction === 'to_claude' ? resolveClaudeSession(args.session_id, { registryDir: config.registryDir }) : null;
   const terminalTarget = direction === 'to_codex' && !ssh ? await resolveTerminalTarget(targetThreadId, transport, config, context.signal) : false;
-  const host = ssh || (direction === 'to_codex' && !terminalTarget ? await hostFor(who, config, context.signal) : null);
+  const host = ssh || (direction === 'to_codex' && !terminalTarget
+    ? await hostFor(who, config, context.signal, targetThreadId) : null);
   const route = { from: sender(who), to: direction === 'to_claude'
     ? { kind: 'claude', id: endpoint.sessionId }
     : { kind: 'codex', id: targetThreadId, ...(ssh ? { host_id: `ssh:${ssh.sshHostAlias}` } : {}) } };

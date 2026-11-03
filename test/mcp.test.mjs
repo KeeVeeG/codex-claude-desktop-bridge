@@ -448,6 +448,11 @@ async function setupMcp(t, { envThreadId, entrypoint = 'claude-desktop', holdFir
   const keyHash = createHash('sha256').update(claude.pipePath.toLowerCase()).digest('hex');
   fs.writeFileSync(path.join(registryDir, `${process.pid}.${keyHash}.key`), JSON.stringify({ peerToken: token, procStartFt: processStart, pidDomain }));
   const { publishCodexHost } = await import('../lib/codex-host.mjs');
+  // Genuine host registrations are independent of prior peer conversations or
+  // the app's recent-chat listing. Keep the generic discovery context newest.
+  for (const threadId of [...codexChats.map(chat => chat.id), 'codex-older-than-recent-list']) {
+    publishCodexHost({ stateDir: fixture.stateDir, pipePath: codex.pipePath, threadId, pid: process.pid });
+  }
   publishCodexHost({ stateDir: fixture.stateDir, pipePath: codex.pipePath, threadId: 'known-host-context', pid: process.pid });
   const env = {
     CODEX_CLAUDE_BRIDGE_STATE_DIR: fixture.stateDir,

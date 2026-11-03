@@ -203,7 +203,7 @@ claudeTest('a pre-aborted send contacts no daemon and records no message', async
 });
 
 /** A registered Codex Desktop app that lists `threads` and accepts sends. */
-async function desktopApp(t, setup, threads, { dropSend = false } = {}) {
+async function desktopApp(t, setup, threads, { dropSend = false, registerTargets = true } = {}) {
   const listTool = { name: 'list_threads', namespace: 'codex_app', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } } } };
   const sent = [];
   const answer = (socket, id, result) => socket.write(encodeFrame({ jsonrpc: '2.0', id, result }));
@@ -218,8 +218,79 @@ async function desktopApp(t, setup, threads, { dropSend = false } = {}) {
     answer(socket, message.id, { success: true, contentItems: [] });
   } });
   publishCodexHost({ stateDir: setup.stateDir, pipePath: app.pipePath, threadId: 'desktop-context' });
-  return { sent: () => sent };
+  if (registerTargets) for (const thread of threads) {
+    publishCodexHost({ stateDir: setup.stateDir, pipePath: app.pipePath, threadId: thread.id });
+  }
+  return { sent: () => sent, pipePath: app.pipePath };
 }
+
+claudeTest('external Desktop delivery selects the genuinely registered target over a newer native child', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const desktop = await desktopApp(t, setup, [{ id: 'root-target', title: 'Root' }]);
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: desktop.pipePath, threadId: 'root-target' });
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: desktop.pipePath, threadId: 'native-child' });
+  await executeBridgeTool('send_to_codex', { thread_id: 'root-target', transport: 'desktop',
+    message: 'A current result.', message_id: 'exact-root-context' }, setup.context);
+  assert.equal(desktop.sent().length, 1);
+  assert.equal(desktop.sent()[0].threadId, 'root-target');
+  assert.equal(desktop.sent()[0].arguments.threadId, 'root-target');
+  assert.equal(desktop.sent()[0].callerSource, 'codex');
+});
+
+claudeTest('external Desktop delivery refuses a target without a genuine matching context before sending', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const desktop = await desktopApp(t, setup, [{ id: 'root-target', title: 'Root' }], { registerTargets: false });
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'root-target', transport: 'desktop',
+    message: 'A current result.', message_id: 'missing-root-context' }, setup.context), /registered.*context.*selected/i);
+  assert.deepEqual(desktop.sent(), []);
+});
+
+claudeTest('a submitted Desktop message with an unsaved receipt reports uncertainty without sending again', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const desktop = await desktopApp(t, setup, [{ id: 'root-target', title: 'Root' }]);
+  const rename = fs.renameSync;
+  const failure = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (String(to).endsWith('state.json') && fs.readFileSync(from, 'utf8').includes('"status": "submitted"')) {
+      throw Object.assign(new Error('Receipt storage unavailable'), { code: 'EIO' });
+    }
+    return rename(from, to);
+  });
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'root-target', transport: 'desktop',
+    message: 'One delivery only.', message_id: 'receipt-write-failed' }, setup.context), error => {
+    assert.equal(error.deliveryUnknown, true);
+    assert.match(error.message, /submitted.*receipt could not be saved/);
+    return true;
+  });
+  failure.mock.restore();
+  assert.equal(desktop.sent().length, 1);
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'root-target', transport: 'desktop',
+    message: 'One delivery only.', message_id: 'receipt-write-failed' }, setup.context), /sending delivery.*No new send/);
+  assert.equal(desktop.sent().length, 1);
+});
+
+test('doctor checks missing ancestor chains and reports an inaccessible creation parent', async t => {
+  const setup = await terminalSetup(t);
+  const stateDir = path.join(setup.root, 'missing-parent', 'missing-state');
+  const access = fs.accessSync;
+  t.mock.method(fs, 'accessSync', (file, mode) => {
+    if (file === setup.root) throw Object.assign(new Error('Access refused'), { code: 'EACCES' });
+    return access(file, mode);
+  });
+  const result = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, stateDir });
+  assert.match(JSON.stringify(result), /cannot be created under its configured parent/);
+});
+
+claudeTest('an unavailable exact target never falls back to a healthy native-child context', async t => {
+  const setup = await claudeCallerSetup(t, { threads: [] });
+  const desktop = await desktopApp(t, setup, [{ id: 'root-target', title: 'Root' }], { registerTargets: false });
+  const stale = await mockPipe(t);
+  await stale.close();
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: stale.pipePath, threadId: 'root-target' });
+  publishCodexHost({ stateDir: setup.stateDir, pipePath: desktop.pipePath, threadId: 'native-child' });
+  await assert.rejects(() => executeBridgeTool('send_to_codex', { thread_id: 'root-target', transport: 'desktop',
+    message: 'A current result.', message_id: 'unavailable-root-context' }, setup.context), /No registered Codex Desktop endpoint/);
+  assert.deepEqual(desktop.sent(), []);
+});
 
 claudeTest('a loaded Desktop-created conversation is sent through its daemon transport regardless of originator', async t => {
   const setup = await claudeCallerSetup(t, { threads: [{ id: 'desk-a', originator: 'Codex Desktop' }, { id: 'term-a', originator: 'codex-tui' }] });

@@ -218,6 +218,15 @@ test('macOS invalid SSH route fails closed without private-socket fallback', mac
   local.assertUntouched();
 });
 
+test('SSH doctor reports a failed handshake without attempting local delivery', mac, async t => {
+  const setup = await actor(t), fixture = sshFixture({ handshake: 'invalid' });
+  const result = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, sshSpawn: fixture.spawnImpl });
+  assert.equal(result.ready, false);
+  assert.match(JSON.stringify(result), /configured SSH route is unavailable/);
+  assert.match(JSON.stringify(result), /No local Codex transport was attempted/);
+  assert.equal(fixture.requests.length, 0);
+});
+
 test('macOS doctor does not advertise send readiness when only active chats are loaded', mac, async t => {
   const setup = await actor(t), fixture = sshFixture({ status: 'active' });
   const result = await executeBridgeTool('bridge_doctor', {}, { ...setup.context, sshSpawn: fixture.spawnImpl });
